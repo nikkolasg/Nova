@@ -18,11 +18,10 @@ use crate::{
       FixedSizeAllocator, ResizeAllocator, VecAllocator,
     },
   },
+  mapreduce::circuit::{MapReduceArity, MapReduceCircuit},
   r1cs::RelaxedR1CSInstance,
   traits::{
-    circuit::{MapReduceArity, MapReduceCircuit, StepCircuit},
-    commitment::CommitmentTrait,
-    Group, ROCircuitTrait, ROConstantsCircuit,
+    circuit::StepCircuit, commitment::CommitmentTrait, Group, ROCircuitTrait, ROConstantsCircuit,
   },
   Commitment,
 };

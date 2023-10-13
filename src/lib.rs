@@ -16,7 +16,7 @@ mod bellperson;
 mod circuit;
 mod constants;
 mod nifs;
-mod mapreduce_circuit;
+mod mapreduce;
 mod parallel_circuit;
 mod r1cs;
 
