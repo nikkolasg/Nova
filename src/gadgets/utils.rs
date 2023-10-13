@@ -12,6 +12,96 @@ use bellperson::{
 use ff::{Field, PrimeField, PrimeFieldBits};
 use num_bigint::BigInt;
 
+pub trait VecAllocator<S>
+where
+  S: PrimeField + PrimeFieldBits,
+{
+  fn alloc<CS>(&self, cs: CS, prefix: &str) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
+  where
+    CS: ConstraintSystem<S>;
+}
+
+impl<S> VecAllocator<S> for Vec<S>
+where
+  S: PrimeField + PrimeFieldBits,
+{
+  fn alloc<CS>(&self, mut cs: CS, prefix: &str) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
+  where
+    CS: ConstraintSystem<S>,
+  {
+    self
+      .iter()
+      .enumerate()
+      .map(|(i, e)| AllocatedNum::alloc(cs.namespace(|| format!("{}_{}", prefix, i)), || Ok(*e)))
+      .collect::<Result<Vec<AllocatedNum<S>>, _>>()
+  }
+}
+
+pub trait FixedSizeAllocator<S>
+where
+  S: PrimeField + PrimeFieldBits,
+{
+  /// Alloc the value as a fixed size vector. The vector is padded with null
+  /// values to get to the given size.
+  fn alloc_fixed_size<CS>(
+    &self,
+    cs: CS,
+    size: usize,
+    prefix: &str,
+  ) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
+  where
+    CS: ConstraintSystem<S>;
+}
+
+impl<S> FixedSizeAllocator<S> for Vec<S>
+where
+  S: PrimeField + PrimeFieldBits,
+{
+  fn alloc_fixed_size<CS>(
+    &self,
+    mut cs: CS,
+    size: usize,
+    prefix: &str,
+  ) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
+  where
+    CS: ConstraintSystem<S>,
+  {
+    assert!(size >= self.len());
+    let mut vec = self.alloc(cs.namespace(|| format!("{}_values_", prefix)), prefix)?;
+    let pad_len = size - self.len();
+    vec.alloc_resize(cs.namespace(|| format!("{}_null", prefix)), pad_len)?;
+    Ok(vec)
+  }
+}
+pub trait ResizeAllocator<S>
+where
+  S: PrimeField + PrimeFieldBits,
+{
+  fn alloc_resize<CS: ConstraintSystem<S>>(
+    &mut self,
+    cs: CS,
+    size: usize,
+  ) -> Result<(), SynthesisError>;
+}
+
+impl<S> ResizeAllocator<S> for Vec<AllocatedNum<S>>
+where
+  S: PrimeFieldBits + PrimeField,
+{
+  fn alloc_resize<CS: ConstraintSystem<S>>(
+    &mut self,
+    mut cs: CS,
+    final_size: usize,
+  ) -> Result<(), SynthesisError> {
+    assert!(self.len() <= final_size);
+    let pad_len = final_size - self.len();
+    let pad_vec = (0..pad_len)
+      .map(|i| AllocatedNum::alloc(cs.namespace(|| format!("null_{i}")), || Ok(S::zero())))
+      .collect::<Result<Vec<_>, SynthesisError>>()?;
+    self.extend(pad_vec);
+    Ok(())
+  }
+}
 /// Gets as input the little indian representation of a number and spits out the number
 pub fn le_bits_to_num<Scalar, CS>(
   mut cs: CS,
