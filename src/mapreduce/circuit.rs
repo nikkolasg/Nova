@@ -1,9 +1,10 @@
+use crate::traits::circuit::TrivialTestCircuit;
 use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
 use core::marker::PhantomData;
 use ff::PrimeField;
-use crate::traits::circuit::TrivialTestCircuit;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone,Debug)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct MapReduceArity(usize, usize);
 impl MapReduceArity {
   pub fn new(map_in: usize, map_out: usize) -> Self {
