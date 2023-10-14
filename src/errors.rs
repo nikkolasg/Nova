@@ -1,9 +1,9 @@
 //! This module defines errors returned by the library.
+use bellperson::SynthesisError;
 use core::fmt::Debug;
-use thiserror::Error;
 
 /// Errors returned by Nova
-#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[derive(thiserror::Error, Debug)]
 pub enum NovaError {
   /// returned if the supplied row or col in (row,col,val) tuple is out of range
   #[error("InvalidIndex")]
@@ -53,4 +53,6 @@ pub enum NovaError {
   /// returned when the tree node is attempting to merge with a node which has a greater than 1 gap in steps
   #[error("InvalidNodeMerge")]
   InvalidNodeMerge,
+  #[error("Synthesis error {0}")]
+  SynthesisError(#[from] SynthesisError),
 }

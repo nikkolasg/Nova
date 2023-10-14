@@ -1,6 +1,5 @@
 use crate::traits::circuit::TrivialTestCircuit;
 use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
-use core::marker::PhantomData;
 use ff::PrimeField;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +57,8 @@ pub trait MapReduceCircuit<F: PrimeField>: Send + Sync + Clone {
     z_right: &[AllocatedNum<F>],
   ) -> Result<Vec<AllocatedNum<F>>, SynthesisError>;
 
+  // TODO: these function should not have to exist, as we can get the output values
+  // from the circuit directly (Vec<AllocatedNum> -> Vec<F>)
   fn output_map(&self, z: &[F]) -> Vec<F>;
   fn output_reduce(&self, z_left: &[F], z_right: &[F]) -> Vec<F>;
 }
@@ -80,9 +81,9 @@ where
 
   fn synthesize_reduce<CS: ConstraintSystem<F>>(
     &self,
-    cs: &mut CS,
+    _cs: &mut CS,
     z_left: &[AllocatedNum<F>],
-    z_right: &[AllocatedNum<F>],
+    _z_right: &[AllocatedNum<F>],
   ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
     Ok(z_left.to_vec())
   }
@@ -90,7 +91,7 @@ where
   fn output_map(&self, z: &[F]) -> Vec<F> {
     z.to_vec()
   }
-  fn output_reduce(&self, z_left: &[F], z_right: &[F]) -> Vec<F> {
+  fn output_reduce(&self, z_left: &[F], _z_right: &[F]) -> Vec<F> {
     z_left.to_vec()
   }
 }

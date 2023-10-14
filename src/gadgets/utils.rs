@@ -16,7 +16,7 @@ pub trait VecAllocator<S>
 where
   S: PrimeField + PrimeFieldBits,
 {
-  fn alloc<CS>(&self, cs: CS, prefix: &str) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
+  fn alloc<CS>(&self, cs: CS) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
   where
     CS: ConstraintSystem<S>;
 }
@@ -25,14 +25,14 @@ impl<S> VecAllocator<S> for Vec<S>
 where
   S: PrimeField + PrimeFieldBits,
 {
-  fn alloc<CS>(&self, mut cs: CS, prefix: &str) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
+  fn alloc<CS>(&self, mut cs: CS) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
   where
     CS: ConstraintSystem<S>,
   {
     self
       .iter()
       .enumerate()
-      .map(|(i, e)| AllocatedNum::alloc(cs.namespace(|| format!("{}_{}", prefix, i)), || Ok(*e)))
+      .map(|(i, e)| AllocatedNum::alloc(cs.namespace(|| format!("{}", i)), || Ok(*e)))
       .collect::<Result<Vec<AllocatedNum<S>>, _>>()
   }
 }
@@ -47,7 +47,6 @@ where
     &self,
     cs: CS,
     size: usize,
-    prefix: &str,
   ) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
   where
     CS: ConstraintSystem<S>;
@@ -61,15 +60,16 @@ where
     &self,
     mut cs: CS,
     size: usize,
-    prefix: &str,
   ) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
   where
     CS: ConstraintSystem<S>,
   {
-    assert!(size >= self.len());
-    let mut vec = self.alloc(cs.namespace(|| format!("{}_values_", prefix)), prefix)?;
+    assert!(self.len() <= size);
+    let mut vec = self.alloc(cs.namespace(|| "_values"))?;
     let pad_len = size - self.len();
-    vec.alloc_resize(cs.namespace(|| format!("{}_null", prefix)), pad_len)?;
+    if pad_len > 0 {
+      vec.alloc_resize(cs.namespace(|| "_null"), pad_len)?;
+    }
     Ok(vec)
   }
 }
@@ -77,6 +77,7 @@ pub trait ResizeAllocator<S>
 where
   S: PrimeField + PrimeFieldBits,
 {
+  // Panics if size is less than len of self
   fn alloc_resize<CS: ConstraintSystem<S>>(
     &mut self,
     cs: CS,
@@ -93,7 +94,12 @@ where
     mut cs: CS,
     final_size: usize,
   ) -> Result<(), SynthesisError> {
-    assert!(self.len() <= final_size);
+    assert!(
+      self.len() <= final_size,
+      "resize self.len {} vs final_size {}",
+      self.len(),
+      final_size
+    );
     let pad_len = final_size - self.len();
     let pad_vec = (0..pad_len)
       .map(|i| AllocatedNum::alloc(cs.namespace(|| format!("null_{i}")), || Ok(S::zero())))

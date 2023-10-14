@@ -37,7 +37,7 @@ use ff::Field;
 use rayon::iter::empty;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct NovaAugmentedParallelCircuitInputs<G: Group> {
   params: G::Scalar, // Hash(Shape of u2, Gens for u2). Needed for computing the challenge.
@@ -104,6 +104,7 @@ impl<G: Group> NovaAugmentedParallelCircuitInputs<G> {
 
 /// The augmented circuit F' in Nova that includes a step circuit F
 /// and the circuit for the verifier in Nova's non-interactive folding scheme
+#[derive(Clone)]
 pub struct NovaAugmentedParallelCircuit<G: Group, MR: MapReduceCircuit<G::Base>> {
   params: NovaAugmentedCircuitParams,
   ro_consts: ROConstantsCircuit<G>,
@@ -155,53 +156,55 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     ),
     SynthesisError,
   > {
+    println!("HERE PARAMS");
     // Allocate the params
     let params = alloc_scalar_as_base::<G, _>(
       cs.namespace(|| "params"),
       self.inputs.get().map_or(None, |inputs| Some(inputs.params)),
     )?;
 
+    println!("HERE INDEXES");
     // Allocate idexes
     let i_start_U = AllocatedNum::alloc(cs.namespace(|| "i_start_U"), || {
       Ok(self.inputs.get()?.i_start_U)
     })?;
+    println!("HERE INDEXES 2");
     let i_end_U = AllocatedNum::alloc(cs.namespace(|| "i_end_U"), || {
       Ok(self.inputs.get()?.i_end_U)
     })?;
+
+    println!("HERE INDEXES 3");
     let i_start_R = AllocatedNum::alloc(cs.namespace(|| "i_start_R"), || {
       Ok(self.inputs.get()?.i_start_R)
     })?;
+
+    println!("HERE INDEXES 4");
     let i_end_R = AllocatedNum::alloc(cs.namespace(|| "i_end_R"), || {
       Ok(self.inputs.get()?.i_end_R)
     })?;
 
+    println!("HERE 1");
     let zero_field = || <G as Group>::Base::zero();
     let inputs = self.inputs.get()?;
     // Allocate input and output vectors
     let z_U_start = inputs.z_U_start.alloc_fixed_size(
       cs.namespace(|| "z_U_start"),
-      arity.total_input(),
-      "z_U_start",
+      arity.total_input(), // makes sure the input size allocation works for both map and reduce
     )?;
-    let z_U_end = inputs.z_U_end.alloc_fixed_size(
-      cs.namespace(|| "z_U_end"),
-      arity.total_output(),
-      "z_U_end",
-    )?;
+    let z_U_end = inputs
+      .z_U_end
+      .alloc_fixed_size(cs.namespace(|| "z_U_end"), arity.total_output())?;
     // Allocate z_R_start
-    let z_R_start = inputs.z_R_start.alloc_fixed_size(
-      cs.namespace(|| "z_R_start"),
-      arity.total_output(),
-      "z_R_start",
-    )?;
+    let z_R_start = inputs
+      .z_R_start
+      .alloc_fixed_size(cs.namespace(|| "z_R_start"), arity.total_input())?;
 
     // Allocate z_R_end
-    let z_R_end = inputs.z_R_end.alloc_fixed_size(
-      cs.namespace(|| "z_R_end"),
-      arity.total_output(),
-      "z_R_end",
-    )?;
+    let z_R_end = inputs
+      .z_R_end
+      .alloc_fixed_size(cs.namespace(|| "z_R_end"), arity.total_output())?;
 
+    println!("HERE 5");
     // Allocate the running instance U
     let U: AllocatedRelaxedR1CSInstance<G> = AllocatedRelaxedR1CSInstance::alloc(
       cs.namespace(|| "Allocate U"),
@@ -324,20 +327,20 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     T_R_U: AllocatedPoint<G>,
     arity: MapReduceArity,
   ) -> Result<(AllocatedRelaxedR1CSInstance<G>, AllocatedBit), SynthesisError> {
-    // Check that u.x[0] = Hash(params, i_start_U, i_end_U z_U_start, z_U_end, U)
+    // Check that u.x[0] = Hash(params, i_start_U, i_end_U, z_U_end, U)
     let mut ro = G::ROCircuit::new(
       self.ro_consts.clone(),
       // one circuit for map & reduce so we take the max
-      NUM_FE_WITHOUT_IO_FOR_CRHF + arity.total_input() + arity.total_output() + 1,
+      NUM_FE_WITHOUT_IO_FOR_CRHF + arity.total_output() + 1,
     );
     ro.absorb(params.clone());
     ro.absorb(i_start_U.clone());
     ro.absorb(i_end_U.clone());
 
-    // TODO only digest inputs and outputs consumed, in reduce steps that'd be arity.reduce_input()
-    for e in z_U_start.clone() {
-      ro.absorb(e);
-    }
+    // see synthetize method end for more infor as for why it's commented out.
+    //for e in z_U_start.clone() {
+    //  ro.absorb(e);
+    //}
     for e in z_U_end {
       ro.absorb(e);
     }
@@ -347,7 +350,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     let hash_u = le_bits_to_num(cs.namespace(|| "bits to hash first"), hash_bits)?;
 
     let check_pass_u = alloc_num_equals(
-      cs.namespace(|| "check consistency of u.X[0] with H(params, U, i, z_u_start, z_u_end)"),
+      cs.namespace(|| "check consistency of u.X[0] with H(params, U, i, z_u_end)"),
       &u.X0,
       &hash_u,
     )?;
@@ -363,18 +366,19 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       self.params.n_limbs,
     )?;
 
-    // Check that r.x[0] = Hash(params, i_start_R, i_end_R, z_R_start, z_R_end, R)
+    // Check that r.x[0] = Hash(params, i_start_R, i_end_R, z_R_end, R)
     ro = G::ROCircuit::new(
       self.ro_consts.clone(),
       // one circuit for both map and reduce so we take the max
-      NUM_FE_WITHOUT_IO_FOR_CRHF + arity.total_input() + arity.total_output() + 1,
+      NUM_FE_WITHOUT_IO_FOR_CRHF + arity.total_output() + 1,
     );
     ro.absorb(params.clone());
     ro.absorb(i_start_R);
     ro.absorb(i_end_R);
-    for e in z_R_start.clone() {
-      ro.absorb(e);
-    }
+    // See synthetize method for more info as to why this is removed.
+    //for e in z_R_start.clone() {
+    //  ro.absorb(e);
+    //}
     for e in z_R_end.clone() {
       ro.absorb(e);
     }
@@ -453,20 +457,21 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     )?;
 
     // Compute variable indicating if this is the base case
-    let mut is_base_case = alloc_num_equals(
+    // Base case description check in Nova paper for F'
+    let left_io_equal = alloc_num_equals(
       cs.namespace(|| "Check if base case as i_start_U == i_end_U"),
       &i_start_U.clone(),
       &i_end_U,
     )?;
-    let r_index_equal = alloc_num_equals(
+    let right_io_equal = alloc_num_equals(
       cs.namespace(|| "In base case i_start_R == i_end_R"),
       &i_start_R,
       &i_end_R,
     )?;
-    is_base_case = AllocatedBit::and(
-      cs.namespace(|| "i_start_U == i_end_U and i_start_U + 1 == i_end_R"),
-      &is_base_case,
-      &r_index_equal,
+    let is_base_case = AllocatedBit::and(
+      cs.namespace(|| "i_start_U == i_end_U and i_start=R == i_end_R"),
+      &left_io_equal,
+      &right_io_equal,
     )?;
 
     // Synthesize the circuit for the base case and get the new running instance
@@ -515,15 +520,15 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       &Boolean::from(is_base_case.clone()),
     )?;
 
-    // Compute i_u_end == i_r_start, because we're doing map reduce, the reduce function takes
+    // Compute i_u_end + 1 == i_r_start,
     // [l_start, l_end] and [r_start, r_end] and we need to make sure we're reducing two consecutive ranges
     // (actually this should not even be needed in the general case as reduce step is associative
     // but let's put it there for the time being for the sake of staying closer to PSE parallel code).
     cs.enforce(
       || "check consecutive range",
-      |lc| lc,
-      |lc| lc,
-      |lc| lc + i_end_U.get_variable() - i_start_R.get_variable(),
+      |lc| lc + i_end_U.get_variable() + CS::one(),
+      |lc| lc + CS::one(),
+      |lc| lc + i_start_R.get_variable(),
     );
 
     let mut z_map_next = self
@@ -549,13 +554,6 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       ));
     }
 
-    // we put them on the same size because once again we only have one circuit so
-    // the output size should be the same regardless of the steps we're doing because
-    // we're hashing them
-    // TODO: enforce to only hash the relevant field, for this PoC it's ok
-    z_reduce_next.alloc_resize(cs.namespace(|| ""), arity.total_output())?;
-    z_map_next.alloc_resize(cs.namespace(|| ""), arity.total_output())?;
-
     // In the base case our output is in the z_map_next and in our normal case it's in z_reduce_next
     let z_output = conditionally_select_vec(
       cs.namespace(|| "select output of F"),
@@ -568,14 +566,28 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     // i.e. we put the interval [left start i, right end i] and we give as z_0 the most left start value
     let mut ro = G::ROCircuit::new(
       self.ro_consts,
-      NUM_FE_WITHOUT_IO_FOR_CRHF + arity.total_output() + arity.total_input() + 1,
+      NUM_FE_WITHOUT_IO_FOR_CRHF + arity.total_output() + 1,
     );
     ro.absorb(params);
     ro.absorb(i_start_U.clone());
     ro.absorb(i_end_R.clone());
-    for e in z_U_start {
-      ro.absorb(e);
-    }
+    // NOTE: this is commented out in the case of mapreduce or general PCD, because
+    // the verifier can not have a public input of the size of the input set (remember
+    // the values are independent!).
+    // As a consequence it means the verifier does not know what are the input
+    // values of the prover unlike IVC. In our case, we actually check the
+    // validity of the values inside the map/reduce computation, for example,
+    // to make sure they belong in a Merkle Tree.
+    // One could directly do this check here, by hashing z_U_start and z_U_start and
+    // input the result into this output hash, thereby "committing" to the input values.
+    // This would force the verifier to do this computation himself which is not desirable
+    // at all even though it could be done outside of the circuit. Our approach is to
+    // verify merkle proofs inside the computation and recreate the root of the merkle tree
+    // as output so the verifier can easily know whether the values corresponds to the tree he
+    // knows about.
+    //for e in z_U_start {
+    //  ro.absorb(e);
+    //}
     for e in z_output {
       ro.absorb(e);
     }

@@ -39,10 +39,10 @@ use circuit::{NovaAugmentedCircuit, NovaAugmentedCircuitInputs, NovaAugmentedCir
 use constants::{BN_LIMB_WIDTH, BN_N_LIMBS, NUM_FE_WITHOUT_IO_FOR_CRHF, NUM_HASH_BITS};
 use core::marker::PhantomData;
 use errors::NovaError;
-use ff::{Field, PrimeField};
+use ff::{Field};
 use gadgets::utils::scalar_as_base;
 use nifs::NIFS;
-use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, R1CS};
+use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness};
 use serde::{Deserialize, Serialize};
 use traits::{
   circuit::StepCircuit,

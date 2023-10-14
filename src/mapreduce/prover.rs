@@ -47,6 +47,7 @@ use bellperson::{
   gadgets::{
     boolean::{AllocatedBit, Boolean},
     num::AllocatedNum,
+    test::TestConstraintSystem,
     Assignment,
   },
   Circuit, ConstraintSystem, Index, SynthesisError,
@@ -94,7 +95,7 @@ where
   C2: MapReduceCircuit<G2::Scalar>,
 {
   /// Create a new `PublicParams`
-  pub fn setup(c_primary: C1, c_secondary: C2) -> Self {
+  pub fn setup(c_primary: C1, c_secondary: C2) -> Result<Self, NovaError> {
     let augmented_circuit_params_primary =
       NovaAugmentedCircuitParams::new(BN_LIMB_WIDTH, BN_N_LIMBS, true);
     let augmented_circuit_params_secondary =
@@ -118,9 +119,18 @@ where
       ro_consts_circuit_primary.clone(),
     );
     let mut cs: ShapeCS<G1> = ShapeCS::new();
-    let _ = circuit_primary.synthesize(&mut cs);
+    println!("BEFORE FIRST SNYTHESIS");
+    {
+      let mut tcs = TestConstraintSystem::new();
+      let _ = circuit_primary.clone().synthesize(&mut tcs)?;
+      println!("IS satisfied? {}", tcs.is_satisfied());
+      println!("Which is unsatisfied? {:?}", tcs.which_is_unsatisfied());
+    }
+    let _ = circuit_primary
+      .synthesize(&mut cs)
+      .map_err(|e| NovaError::SynthesisError(e))?;
     let (r1cs_shape_primary, ck_primary) = cs.r1cs_shape();
-
+    println!("PASSED FIRST SNYTHESIS");
     // Initialize ck for the secondary
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
       augmented_circuit_params_secondary.clone(),
@@ -129,10 +139,12 @@ where
       ro_consts_circuit_secondary.clone(),
     );
     let mut cs: ShapeCS<G2> = ShapeCS::new();
-    let _ = circuit_secondary.synthesize(&mut cs);
+    let _ = circuit_secondary
+      .synthesize(&mut cs)
+      .map_err(|e| NovaError::SynthesisError(e))?;
     let (r1cs_shape_secondary, ck_secondary) = cs.r1cs_shape();
 
-    Self {
+    Ok(Self {
       F_arity_primary,
       F_arity_secondary,
       ro_consts_primary,
@@ -147,7 +159,7 @@ where
       augmented_circuit_params_secondary,
       _p_c1: Default::default(),
       _p_c2: Default::default(),
-    }
+    })
   }
 
   /// Returns the number of constraints in the primary and secondary circuits
@@ -236,11 +248,10 @@ where
         pp.r1cs_shape_secondary.get_digest(),
         G1::Scalar::from(i.try_into().unwrap()),
         G1::Scalar::from((i).try_into().unwrap()),
-        // In the base case, we're not increasing the index, since we're not going
-        // "up the tree" which is the way the PCD graphs flows.
-        // The circuit condition is still respected z_left_end == z_right_start
-        G1::Scalar::from((i).try_into().unwrap()),
-        G1::Scalar::from((i).try_into().unwrap()),
+        // we do this to satisfy the constraint in the augmented circuit
+        // that left_end == right_start which is in the base case as well
+        G1::Scalar::from((i + 1).try_into().unwrap()),
+        G1::Scalar::from((i + 1).try_into().unwrap()),
         z_start_primary.clone(),
         z_start_primary.clone(),
         z_start_primary.clone(),
@@ -260,10 +271,9 @@ where
       c_primary.clone(),
       pp.ro_consts_circuit_primary.clone(),
     );
-    let _ = circuit_primary.synthesize(&mut cs_primary);
-    let (u_primary, w_primary) = cs_primary
-      .r1cs_instance_and_witness(&pp.r1cs_shape_primary, &pp.ck_primary)
-      .map_err(|_e| NovaError::UnSat)?;
+    let _ = circuit_primary.synthesize(&mut cs_primary)?;
+    let (u_primary, w_primary) =
+      cs_primary.r1cs_instance_and_witness(&pp.r1cs_shape_primary, &pp.ck_primary)?;
 
     // base case for the secondary
     let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
@@ -273,8 +283,8 @@ where
         pp.r1cs_shape_primary.get_digest(),
         G2::Scalar::from(i),
         G2::Scalar::from(i),
-        G2::Scalar::from(i),
-        G2::Scalar::from(i),
+        G2::Scalar::from(i + 1),
+        G2::Scalar::from(i + 1),
         z_start_secondary.clone(),
         z_start_secondary.clone(),
         z_start_secondary.clone(),
@@ -294,9 +304,8 @@ where
       pp.ro_consts_circuit_secondary.clone(),
     );
     let _ = circuit_secondary.synthesize(&mut cs_secondary);
-    let (u_secondary, w_secondary) = cs_secondary
-      .r1cs_instance_and_witness(&pp.r1cs_shape_secondary, &pp.ck_secondary)
-      .map_err(|_e| NovaError::UnSat)?;
+    let (u_secondary, w_secondary) =
+      cs_secondary.r1cs_instance_and_witness(&pp.r1cs_shape_secondary, &pp.ck_secondary)?;
 
     // IVC proof for the primary circuit
     let w_primary = RelaxedR1CSWitness::from_r1cs_witness(&pp.r1cs_shape_primary, &w_primary);
@@ -323,7 +332,8 @@ where
     }
 
     let i_start = i;
-    let i_end = i; // base case level - we are not going up the tree so we're not increasing
+    let i_end = i + 1;
+    // base case is map step
     let z_end_primary = c_primary.output_map(&z_start_primary);
     let z_end_secondary = c_secondary.output_map(&z_start_secondary);
 
@@ -344,6 +354,7 @@ where
         i_end,
         z_start_primary,
         z_end_primary,
+        z_start_secondary,
         z_end_secondary,
       },
     })
@@ -354,9 +365,10 @@ where
   pub fn reduce(self, nright: TreeNode<'a, G1, G2, C1, C2>) -> Result<Self, NovaError> {
     let left = self.data;
     let right = nright.data;
-    // We have to merge two proofs where the right starts one index after the left ends
-    // note that this would fail in the proof step but we error earlier here for debugging clarity.
-    if left.i_end + 1 != right.i_start {
+    // NOTE: a major difference with the original PSE code is that we do not let a "space" between
+    // two leaves. All leaves are assigned consecutive indices.
+    // Ex: base leaf [0->1] [1->2] , when    // Ex: base leaf [0->1] [1->2] , when we merge, final indices are [0->2]]
+    if left.i_end != right.i_start {
       return Err(NovaError::InvalidNodeMerge);
     }
 
@@ -405,7 +417,7 @@ where
         G1::Scalar::from(right.i_start as u64),
         G1::Scalar::from(right.i_end as u64),
         left.z_start_primary.clone(),
-        left.z_end_primary,
+        left.z_end_primary.clone(),
         right.z_start_primary,
         right.z_end_primary.clone(),
         Some(left.U_secondary),
@@ -479,7 +491,7 @@ where
         G2::Scalar::from(right.i_start as u64),
         G2::Scalar::from(right.i_end as u64),
         left.z_start_secondary.clone(),
-        left.z_end_secondary,
+        left.z_end_secondary.clone(),
         right.z_start_secondary,
         right.z_end_secondary.clone(),
         Some(left.U_primary),
@@ -516,10 +528,27 @@ where
     // we know we have proven for this range.
     let i_start = left.i_start.clone();
     let i_end = right.i_end.clone();
-    let z_start_primary = left.z_start_primary;
-    let z_end_primary = right.z_end_primary;
+    // z_start is technically useless after the map step, because reduce always take
+    // the output and do not hash the first values. Nevertheless since we are in a single circuit
+    // we have to give it as input always, as the "map" function is always computed.
+    // TODO: for Supernova, it probably can be removed.
+    let mut z_start_primary = left.z_start_primary;
+    // Compute the output ourselves Reduce(left_node.output,right_node.output)
+    let z_end_primary = self
+      .c_primary
+      .output_reduce(&left.z_end_primary, &right.z_end_primary);
+    assert!(
+      z_end_primary.len() != self.c_primary.arity().reduce_output(),
+      "Inconsistent reduce output lengths"
+    );
     let z_start_secondary = left.z_start_secondary;
-    let z_end_secondary = right.z_end_secondary;
+    let z_end_secondary = self
+      .c_secondary
+      .output_reduce(&left.z_end_secondary, &right.z_end_secondary);
+    assert!(
+      z_end_secondary.len() != self.c_secondary.arity().reduce_output(),
+      "Inconsistent reduce output lengths"
+    );
 
     Ok(TreeNode {
       pp: self.pp,
@@ -665,9 +694,8 @@ mod tests {
       cs: &mut CS,
       z: &[AllocatedNum<F>],
     ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
-      let x = &z[0];
-      let x_sq = x.square(cs.namespace(|| "x_sq"))?;
-      Ok(vec![x_sq])
+      let x = z[0].clone();
+      Ok(vec![x])
     }
     fn synthesize_reduce<CS: ConstraintSystem<F>>(
       &self,
@@ -691,22 +719,23 @@ mod tests {
     }
 
     fn output_map(&self, z: &[F]) -> Vec<F> {
-      vec![z[0] * z[0]]
+      vec![z[0]]
     }
     fn output_reduce(&self, z_left: &[F], z_right: &[F]) -> Vec<F> {
       vec![z_left[0] + z_right[0]]
     }
   }
 
+  use eyre::Result;
   #[test]
-  fn test_parallel_combine_two_ivc() {
+  fn test_parallel_combine_two_ivc() -> Result<()> {
     // produce public parameters
     let pp = PublicParams::<
       G1,
       G2,
       AverageCircuit<<G1 as Group>::Scalar>,
       TrivialTestCircuit<<G2 as Group>::Scalar>,
-    >::setup(AverageCircuit::default(), TrivialTestCircuit::default());
+    >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
 
     // produce a recursive SNARK
     let leaf_0 = TreeNode::map_step(
@@ -716,8 +745,7 @@ mod tests {
       0,
       vec![<G1 as Group>::Scalar::one()],
       vec![<G2 as Group>::Scalar::one()],
-    )
-    .unwrap();
+    )?;
 
     let leaf_1 = TreeNode::map_step(
       &pp,
@@ -726,10 +754,10 @@ mod tests {
       1,
       vec![<G1 as Group>::Scalar::one()],
       vec![<G2 as Group>::Scalar::one()],
-    )
-    .unwrap();
+    )?;
 
     let res_2 = leaf_0.reduce(leaf_1);
     assert!(res_2.is_ok());
+    Ok(())
   }
 }

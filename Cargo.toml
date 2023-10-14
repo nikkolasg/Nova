@@ -33,6 +33,7 @@ bitvec = "1.0"
 byteorder = "1.4.3"
 thiserror = "1.0" 
 ark-std = { version = "0.4", features = ["print-trace"] }
+eyre = "0.6.8"
 
 [target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
 pasta-msm = { version = "0.1.0", package = "lurk-pasta-msm" }
