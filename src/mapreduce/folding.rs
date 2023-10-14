@@ -183,54 +183,24 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       arity.total_input(),
       "z_U_start",
     )?;
-    //let z_U_start = (0..arity.total_input())
-    //  .map(|i| {
-    //    AllocatedNum::alloc(cs.namespace(|| format!("z_U_start_{i}")), || {
-    //      // we pad to the max arity of the circuit - see MapReduceArity for more details
-    //      Ok(self.inputs.get()?.z_U_start.get(i).unwrap_or(&zero_field))
-    //    })
-    //  })
-    //  .collect::<Result<Vec<AllocatedNum<G::Base>>, _>>()?;
     let z_U_end = inputs.z_U_end.alloc_fixed_size(
       cs.namespace(|| "z_U_end"),
       arity.total_output(),
       "z_U_end",
     )?;
-    //let z_U_end = (0..arity.total_output())
-    //  .map(|i| {
-    //    AllocatedNum::alloc(cs.namespace(|| format!("z_U_end_{i}")), || {
-    //      Ok(self.inputs.get()?.z_U_end.get(i).unwrap_or(&zero_field))
-    //    })
-    //  })
-    //  .collect::<Result<Vec<AllocatedNum<G::Base>>, _>>()?;
-
     // Allocate z_R_start
     let z_R_start = inputs.z_R_start.alloc_fixed_size(
       cs.namespace(|| "z_R_start"),
       arity.total_output(),
       "z_R_start",
     )?;
-    //let z_R_start = (0..arity.total_input())
-    //  .map(|i| {
-    //    AllocatedNum::alloc(cs.namespace(|| format!("z_R_start_{i}")), || {
-    //      Ok(self.inputs.get()?.z_R_start.get(i).unwrap_or(&zero_field))
-    //    })
-    //  })
-    //  .collect::<Result<Vec<AllocatedNum<G::Base>>, _>>()?;
-    // Allocate z_R_end
 
+    // Allocate z_R_end
     let z_R_end = inputs.z_R_end.alloc_fixed_size(
       cs.namespace(|| "z_R_end"),
       arity.total_output(),
       "z_R_end",
     )?;
-    //let z_R_end = (0..arity.total_output())
-    //  .map(|i| {
-    //    AllocatedNum::alloc(cs.namespace(|| format!("z_R_end_{i}")), || {
-    //      Ok(self.inputs.get()?.z_R_end.get(i).unwrap_or(&zero_field))
-    //    })
-    //  })
-    //  .collect::<Result<Vec<AllocatedNum<G::Base>>, _>>()?;
 
     // Allocate the running instance U
     let U: AllocatedRelaxedR1CSInstance<G> = AllocatedRelaxedR1CSInstance::alloc(
@@ -559,6 +529,8 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     let mut z_map_next = self
       .mr_circuit
       // we know the map is the base case and thus takes the input
+      // We could also take z_U_end but in the base case, it's just simpler to think that we take the input to 
+      // the map function.
       .synthesize_map(&mut cs.namespace(|| "F_map"), &z_U_start)?;
     let mut z_reduce_next = self
         .mr_circuit

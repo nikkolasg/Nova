@@ -28,11 +28,14 @@ use crate::{
     r1cs::{AllocatedR1CSInstance, AllocatedRelaxedR1CSInstance},
     utils::{alloc_num_equals, alloc_scalar_as_base, conditionally_select_vec, le_bits_to_num},
   },
+  mapreduce::{
+    circuit::{MapReduceArity, MapReduceCircuit},
+    folding::{NovaAugmentedParallelCircuit, NovaAugmentedParallelCircuitInputs},
+  },
   nifs::NIFS,
-  parallel_circuit::{NovaAugmentedParallelCircuit, NovaAugmentedParallelCircuitInputs},
   r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, R1CS},
   traits::{
-    circuit::{StepCircuit, TrivialTestCircuit},
+    circuit::TrivialTestCircuit,
     commitment::{CommitmentEngineTrait, CommitmentTrait},
     snark::RelaxedR1CSSNARKTrait,
     AbsorbInROTrait, Group, ROConstants, ROConstantsCircuit, ROConstantsTrait, ROTrait,
@@ -64,11 +67,11 @@ pub struct PublicParams<G1, G2, C1, C2>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: StepCircuit<G1::Scalar>,
-  C2: StepCircuit<G2::Scalar>,
+  C1: MapReduceCircuit<G1::Scalar>,
+  C2: MapReduceCircuit<G2::Scalar>,
 {
-  F_arity_primary: usize,
-  F_arity_secondary: usize,
+  F_arity_primary: MapReduceArity,
+  F_arity_secondary: MapReduceArity,
   ro_consts_primary: ROConstants<G1>,
   ro_consts_circuit_primary: ROConstantsCircuit<G2>,
   ck_primary: CommitmentKey<G1>,
@@ -87,8 +90,8 @@ impl<G1, G2, C1, C2> PublicParams<G1, G2, C1, C2>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: StepCircuit<G1::Scalar>,
-  C2: StepCircuit<G2::Scalar>,
+  C1: MapReduceCircuit<G1::Scalar>,
+  C2: MapReduceCircuit<G2::Scalar>,
 {
   /// Create a new `PublicParams`
   pub fn setup(c_primary: C1, c_secondary: C2) -> Self {
@@ -174,8 +177,8 @@ pub struct NovaTreeNode<G1, G2, C1, C2>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: StepCircuit<G1::Scalar>,
-  C2: StepCircuit<G2::Scalar>,
+  C1: MapReduceCircuit<G1::Scalar>,
+  C2: MapReduceCircuit<G2::Scalar>,
 {
   // The running instance of the primary
   W_primary: RelaxedR1CSWitness<G1>,
@@ -195,6 +198,9 @@ where
   z_end_primary: Vec<G1::Scalar>,
   z_start_secondary: Vec<G2::Scalar>,
   z_end_secondary: Vec<G2::Scalar>,
+  pp: PublicParams<G1, G2, C1, C2>,
+  c_primary: C1,
+  c_secondary: C2,
   _p_c1: PhantomData<C1>,
   _p_c2: PhantomData<C2>,
 }
@@ -203,17 +209,19 @@ impl<G1, G2, C1, C2> NovaTreeNode<G1, G2, C1, C2>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: StepCircuit<G1::Scalar>,
-  C2: StepCircuit<G2::Scalar>,
+  C1: MapReduceCircuit<G1::Scalar>,
+  C2: MapReduceCircuit<G2::Scalar>,
 {
-  /// Creates a tree node which proves one computation and runs a base case F' proof. The running instances
+  /// Creates a leaf tree node which proves one computation and runs a base case F' proof. The running instances
   /// are set to defaults and the new proofs are set ot this base case proof.
-  pub fn new(
+  pub fn leaf(
     pp: &PublicParams<G1, G2, C1, C2>,
     c_primary: C1,
     c_secondary: C2,
     i: u64,
     z_start_primary: Vec<G1::Scalar>,
+    // TODO Since we only call "new" in the base case, we should not have to provide this and do as in
+    // vanilla Nova where z_i is an Option
     z_end_primary: Vec<G1::Scalar>,
     z_start_secondary: Vec<G2::Scalar>,
     z_end_secondary: Vec<G2::Scalar>,
@@ -225,6 +233,13 @@ where
         pp.r1cs_shape_secondary.get_digest(),
         G1::Scalar::from(i.try_into().unwrap()),
         G1::Scalar::from((i).try_into().unwrap()),
+        // To understand why we do +1 here, one needs to look at the parallel snark prover
+        // the base case is composed of (U_l u_l) and (U_r u_r)
+        // the first pair has io (z0, z0) the second pair (z1,z1)
+        // so when folding happens, the circuit computes F(z0) = z1
+        // so've proven the map function on the first leaf, so we're at step 1 after this
+        // or in other words, we've proven the map function on the range [0,1[
+        // 1 is excluded in the range because that would be proven at the next step (or decider stage)
         G1::Scalar::from((i + 1).try_into().unwrap()),
         G1::Scalar::from((i + 1).try_into().unwrap()),
         z_start_primary.clone(),
@@ -302,14 +317,14 @@ where
     let W_secondary = w_secondary.clone();
     let U_secondary = u_secondary.clone();
 
-    if z_start_primary.len() != pp.F_arity_primary
-      || z_start_secondary.len() != pp.F_arity_secondary
+    if z_start_primary.len() != pp.F_arity_primary.total_input()
+      || z_start_secondary.len() != pp.F_arity_secondary.total_input()
     {
       return Err(NovaError::InvalidStepOutputLength);
     }
 
     let i_start = i;
-    let i_end = i + 1;
+    let i_end = i + 1; // base case level
 
     Ok(Self {
       W_primary,
@@ -326,6 +341,9 @@ where
       z_end_primary,
       z_start_secondary,
       z_end_secondary,
+      pp,
+      c_primary,
+      c_secondary,
       _p_c1: Default::default(),
       _p_c2: Default::default(),
     })
@@ -333,13 +351,7 @@ where
 
   /// Merges another node into this node. The node this is called on is treated as the left node and the node which is
   /// consumed is treated as the right node.
-  pub fn merge(
-    self,
-    right: NovaTreeNode<G1, G2, C1, C2>,
-    pp: &PublicParams<G1, G2, C1, C2>,
-    c_primary: &C1,
-    c_secondary: &C2,
-  ) -> Result<Self, NovaError> {
+  pub fn merge(self, right: NovaTreeNode<G1, G2, C1, C2>) -> Result<Self, NovaError> {
     // We have to merge two proofs where the right starts one index after the left ends
     // note that this would fail in the proof step but we error earlier here for debugging clarity.
     if self.i_end + 1 != right.i_start {
@@ -367,6 +379,7 @@ where
       &right.w_secondary,
       false,
     )?;
+    // here we're folding two relaxed R1CS instances instead of the vanilla folding step of Nova RR1CS x R1CS
     let (nifs_secondary, (U_secondary, W_secondary)) = NIFS::prove(
       &pp.ck_secondary,
       &pp.ro_consts_secondary,
@@ -405,7 +418,7 @@ where
     let circuit_primary: NovaAugmentedParallelCircuit<G2, C1> = NovaAugmentedParallelCircuit::new(
       pp.augmented_circuit_params_primary.clone(),
       Some(inputs_primary),
-      c_primary.clone(),
+      self.c_primary.clone(),
       pp.ro_consts_circuit_primary.clone(),
     );
     let _ = circuit_primary.synthesize(&mut cs_primary);
@@ -476,7 +489,7 @@ where
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
       pp.augmented_circuit_params_secondary.clone(),
       Some(inputs_secondary),
-      c_secondary.clone(),
+      self.c_secondary.clone(),
       pp.ro_consts_circuit_secondary.clone(),
     );
     let _ = circuit_secondary.synthesize(&mut cs_secondary);
@@ -521,6 +534,9 @@ where
       z_end_primary,
       z_start_secondary,
       z_end_secondary,
+      pp: self.pp,
+      c_primary: self.c_primary,
+      c_secondary: self.c_secondary,
       _p_c1: Default::default(),
       _p_c2: Default::default(),
     })
@@ -533,9 +549,10 @@ pub struct ParallelSNARK<G1, G2, C1, C2>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: StepCircuit<G1::Scalar>,
-  C2: StepCircuit<G2::Scalar>,
+  C1: MapReduceCircuit<G1::Scalar>,
+  C2: MapReduceCircuit<G2::Scalar>,
 {
+  pp: PublicParams<G1, G2, C1, C2>,
   nodes: Vec<NovaTreeNode<G1, G2, C1, C2>>,
 }
 
@@ -544,92 +561,56 @@ impl<G1, G2, C1, C2> ParallelSNARK<G1, G2, C1, C2>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: StepCircuit<G1::Scalar>,
-  C2: StepCircuit<G2::Scalar>,
+  C1: MapReduceCircuit<G1::Scalar>,
+  C2: MapReduceCircuit<G2::Scalar>,
 {
   /// Create a new instance of parallel SNARK
-  pub fn new(
+  pub fn prove(
     pp: &PublicParams<G1, G2, C1, C2>,
-    steps: usize,
-    z0_primary: Vec<G1::Scalar>,
-    z0_secondary: Vec<G2::Scalar>,
+    // Each z0 for each leaf, independent
+    z0s_primary: Vec<Vec<G1::Scalar>>,
+    z0_secondary: Vec<Vec<G2::Scalar>>,
     c_primary: C1,
     c_secondary: C2,
   ) -> Self {
-    // Tuple's structure is (index, zi_primary, zi_secondary)
-    let mut zi = Vec::<(usize, Vec<G1::Scalar>, Vec<G2::Scalar>)>::new();
-    // First input value of Z0, these steps can't be done in parallel
-    zi.push((0, z0_primary.clone(), z0_secondary.clone()));
-    for i in 1..steps {
-      let (index, prev_primary, prev_secondary) = &zi[i as usize - 1];
-      zi.push((
-        i,
-        c_primary.output(&prev_primary),
-        c_secondary.output(&prev_secondary),
-      ));
-    }
-    // Do calculate node tree in parallel
-    let nodes = zi
-      .par_chunks(2)
-      .map(|item| {
-        match item {
-          // There are 2 nodes
-          [l, r] => NovaTreeNode::new(
-            &pp,
-            c_primary.clone(),
-            c_secondary.clone(),
-            l.0 as u64,
-            l.1.clone(),
-            r.1.clone(),
-            l.2.clone(),
-            r.2.clone(),
-          )
-          .expect("Unable to create base node"),
-          // Just 1 node left
-          [l] => NovaTreeNode::new(
-            &pp,
-            c_primary.clone(),
-            c_secondary.clone(),
-            l.0 as u64,
-            zi[l.0 - 1].1.clone(),
-            l.1.clone(),
-            zi[l.0 - 1].2.clone(),
-            l.2.clone(),
-          )
-          .expect("Unable to create the last base node"),
-          _ => panic!("Unexpected chunk size"),
-        }
+    let leaves = z0s_primary
+      .into_par_iter()
+      .zip(z0_secondary.into_iter())
+      .enumerate()
+      .map(|(i, (z0p, z0s))| {
+        NovaTreeNode::leaf(
+          &pp,
+          c_primary.clone(),
+          c_secondary.clone(),
+          i as u64,
+          z0p,
+          z0p,
+          z0s,
+          z0s,
+        )
       })
-      .collect();
-    // Create a new parallel prover wit basic leafs
-    Self { nodes }
-  }
-
-  /// Perform the proving in parallel
-  pub fn prove(&mut self, pp: &PublicParams<G1, G2, C1, C2>, c_primary: &C1, c_secondary: &C2) {
+      .collect::<Result<Vec<_>>>()?;
     // Calculate the max height of the tree
     // ⌈log2(n)⌉ + 1
-    let max_height = ((self.nodes.len() as f64).log2().ceil() + 1f64) as usize;
+    let max_height = ((leaves.len() as f64).log2().ceil() + 1f64) as usize;
 
+    let mut nodes = leaves;
     // Build up the tree with max given height
     for level in 0..max_height {
       // Exist if we on the root of the tree
-      if self.nodes.len() == 1 {
+      if nodes.len() == 1 {
         break;
       }
       // New nodes list will reduce a half each round
-      self.nodes = self
+      nodes = self
         .nodes
         .par_chunks(2)
         .map(|item| match item {
           // There are 2 nodes in the chunk
-          [vl, vr] => (*vl)
-            .clone()
-            .merge((*vr).clone(), pp, c_primary, c_secondary)
-            .expect("Merge the left and right should work"),
+          [&vl, &vr] => vl.merge(vr).expect("Merge the left and right should work"),
           // Just 1 node left, we carry it to the next level
           [vl] => (*vl).clone(),
-          _ => panic!("Invalid chunk size"),
+          _ => panic!("Invalid chunk size - tree of size not power of two not supported yet"),
         })
         .collect();
     }
@@ -653,66 +634,6 @@ pub struct FoldInput<G: Group> {
   pub witness: Vec<G::Scalar>,
   pub public_inputs: Vec<G::Scalar>,
   pub public_outputs: Vec<G::Scalar>,
-}
-
-pub fn par_digest_folds<Z1, Z2, S1, S2>(
-  pp: crate::parallel_prover::PublicParams<Z1, Z2, S1, S2>,
-  fold_inputs: Vec<FoldInput<Z1>>,
-  primary_circuit: S1,
-  secondary_circuit: S2,
-) -> Result<NovaTreeNode<Z1, Z2, S1, S2>, NovaError>
-where
-  Z1: Group<Base = <Z2 as Group>::Scalar>,
-  Z2: Group<Base = <Z1 as Group>::Scalar>,
-  S1: StepCircuit<Z1::Scalar>,
-  S2: StepCircuit<Z2::Scalar>,
-{
-  let base_node = start_timer!(|| "base nodes folding time");
-  // Process parallely all base_level folds.
-  let mut folds: Vec<NovaTreeNode<Z1, Z2, S1, S2>> = fold_inputs
-    .par_chunks(2)
-    .enumerate()
-    .map(|(i, fold_input)| {
-      let node = NovaTreeNode::new(
-        &pp,
-        primary_circuit.clone(),
-        secondary_circuit.clone(),
-        2 * i as u64,
-        fold_input[0].public_inputs.clone(),
-        fold_input[1].public_outputs.clone(),
-        vec![<Z2 as Group>::Scalar::zero()],
-        vec![<Z2 as Group>::Scalar::zero()],
-      )
-      .unwrap();
-
-      node
-    })
-    .collect();
-  end_timer!(base_node);
-
-  while (folds.len() > 1) {
-    let internal_node = start_timer!(|| "internal node level folding time");
-    folds = folds
-      .par_chunks(2)
-      .map(|item| {
-        let node = match item {
-          // There are 2 nodes in the chunk
-          [vl, vr] => (*vl)
-            .clone()
-            .merge((*vr).clone(), &pp, &primary_circuit, &secondary_circuit)
-            .expect("Merge the left and right should work"),
-          // Just 1 node left, we carry it to the next level
-          [vl] => (*vl).clone(),
-          _ => panic!("Invalid chunk size"),
-        };
-
-        node
-      })
-      .collect();
-    end_timer!(internal_node);
-  }
-
-  Ok(folds[0].clone())
 }
 
 mod tests {
