@@ -15,12 +15,10 @@ impl MapReduceArity {
   pub fn map_output(&self) -> usize {
     self.1
   }
-  // Reduce steps take 2 inputs and produce one
-  // These inputs come either from the map step or the reduce step
-  // Therefore, input of reduce is twice the output of map step
-  // and output of reduce is only once output of map step
+  // Reduce steps take 2 inputs and produce one - this function
+  // returns the size of a single input.
   pub fn reduce_input(&self) -> usize {
-    self.1 * 2
+    self.1
   }
   pub fn reduce_output(&self) -> usize {
     self.1

@@ -12,65 +12,42 @@ use bellperson::{
 use ff::{Field, PrimeField, PrimeFieldBits};
 use num_bigint::BigInt;
 
-pub trait VecAllocator<S>
-where
-  S: PrimeField + PrimeFieldBits,
-{
-  fn alloc<CS>(&self, cs: CS) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
-  where
-    CS: ConstraintSystem<S>;
-}
-
-impl<S> VecAllocator<S> for Vec<S>
-where
-  S: PrimeField + PrimeFieldBits,
-{
-  fn alloc<CS>(&self, mut cs: CS) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
-  where
-    CS: ConstraintSystem<S>,
-  {
-    self
-      .iter()
-      .enumerate()
-      .map(|(i, e)| AllocatedNum::alloc(cs.namespace(|| format!("{}", i)), || Ok(*e)))
-      .collect::<Result<Vec<AllocatedNum<S>>, _>>()
-  }
-}
-
 pub trait FixedSizeAllocator<S>
 where
   S: PrimeField + PrimeFieldBits,
 {
   /// Alloc the value as a fixed size vector. The vector is padded with null
   /// values to get to the given size.
-  fn alloc_fixed_size<CS>(
-    &self,
+  fn alloc_fixed_size<'a, CS, F>(
     cs: CS,
-    size: usize,
-  ) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
-  where
-    CS: ConstraintSystem<S>;
-}
-
-impl<S> FixedSizeAllocator<S> for Vec<S>
-where
-  S: PrimeField + PrimeFieldBits,
-{
-  fn alloc_fixed_size<CS>(
-    &self,
-    mut cs: CS,
-    size: usize,
+    total_size: usize,
+    vector: F,
   ) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
   where
     CS: ConstraintSystem<S>,
+    F: Fn() -> Result<&'a Vec<S>, SynthesisError>;
+}
+
+impl<S> FixedSizeAllocator<S> for AllocatedNum<S>
+where
+  S: PrimeField + PrimeFieldBits,
+{
+  fn alloc_fixed_size<'a, CS, F>(
+    mut cs: CS,
+    total_size: usize,
+    vector: F,
+  ) -> Result<Vec<AllocatedNum<S>>, SynthesisError>
+  where
+    CS: ConstraintSystem<S>,
+    F: Fn() -> Result<&'a Vec<S>, SynthesisError>,
   {
-    assert!(self.len() <= size);
-    let mut vec = self.alloc(cs.namespace(|| "_values"))?;
-    let pad_len = size - self.len();
-    if pad_len > 0 {
-      vec.alloc_resize(cs.namespace(|| "_null"), pad_len)?;
-    }
-    Ok(vec)
+    (0..total_size)
+      .map(|i| {
+        AllocatedNum::alloc(cs.namespace(|| format!("{}", i)), || {
+          Ok(vector()?.get(i).cloned().unwrap_or_else(|| S::zero()))
+        })
+      })
+      .collect::<Result<Vec<_>, SynthesisError>>()
   }
 }
 pub trait ResizeAllocator<S>
@@ -81,7 +58,7 @@ where
   fn alloc_resize<CS: ConstraintSystem<S>>(
     &mut self,
     cs: CS,
-    size: usize,
+    new_size: usize,
   ) -> Result<(), SynthesisError>;
 }
 
@@ -92,15 +69,15 @@ where
   fn alloc_resize<CS: ConstraintSystem<S>>(
     &mut self,
     mut cs: CS,
-    final_size: usize,
+    new_size: usize,
   ) -> Result<(), SynthesisError> {
     assert!(
-      self.len() <= final_size,
+      self.len() <= new_size,
       "resize self.len {} vs final_size {}",
       self.len(),
-      final_size
+      new_size
     );
-    let pad_len = final_size - self.len();
+    let pad_len = new_size - self.len();
     let pad_vec = (0..pad_len)
       .map(|i| AllocatedNum::alloc(cs.namespace(|| format!("null_{i}")), || Ok(S::zero())))
       .collect::<Result<Vec<_>, SynthesisError>>()?;

@@ -120,7 +120,7 @@ where
     );
     let mut cs: ShapeCS<G1> = ShapeCS::new();
     println!("BEFORE FIRST SNYTHESIS");
-    {
+    if false {
       let mut tcs = TestConstraintSystem::new();
       let _ = circuit_primary.clone().synthesize(&mut tcs)?;
       println!("IS satisfied? {}", tcs.is_satisfied());
@@ -533,21 +533,27 @@ where
     // we have to give it as input always, as the "map" function is always computed.
     // TODO: for Supernova, it probably can be removed.
     let mut z_start_primary = left.z_start_primary;
+    let arity1 = self.c_primary.arity();
+    let arity2 = self.c_secondary.arity();
     // Compute the output ourselves Reduce(left_node.output,right_node.output)
     let z_end_primary = self
       .c_primary
       .output_reduce(&left.z_end_primary, &right.z_end_primary);
     assert!(
-      z_end_primary.len() != self.c_primary.arity().reduce_output(),
-      "Inconsistent reduce output lengths"
+      z_end_primary.len() == arity1.reduce_output(),
+      "prover primary inconsistent reduce output lengths: got {}, wanted {}",
+      z_end_primary.len(),
+      arity1.reduce_output()
     );
     let z_start_secondary = left.z_start_secondary;
     let z_end_secondary = self
       .c_secondary
       .output_reduce(&left.z_end_secondary, &right.z_end_secondary);
     assert!(
-      z_end_secondary.len() != self.c_secondary.arity().reduce_output(),
-      "Inconsistent reduce output lengths"
+      z_end_secondary.len() == arity2.reduce_output(),
+      "prover secondary inconsistent reduce output lengths: got {} wanted {}",
+      z_end_secondary.len(),
+      arity2.reduce_output()
     );
 
     Ok(TreeNode {

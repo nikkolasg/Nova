@@ -15,7 +15,7 @@ use crate::{
     r1cs::{AllocatedR1CSInstance, AllocatedRelaxedR1CSInstance},
     utils::{
       alloc_num_equals, alloc_scalar_as_base, conditionally_select_vec, le_bits_to_num,
-      FixedSizeAllocator, ResizeAllocator, VecAllocator,
+      FixedSizeAllocator, ResizeAllocator,
     },
   },
   mapreduce::circuit::{MapReduceArity, MapReduceCircuit},
@@ -183,28 +183,37 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       Ok(self.inputs.get()?.i_end_R)
     })?;
 
-    println!("HERE 1");
-    let zero_field = || <G as Group>::Base::zero();
-    let inputs = self.inputs.get()?;
+    println!("HERE 2");
     // Allocate input and output vectors
-    let z_U_start = inputs.z_U_start.alloc_fixed_size(
+    // z_U_start is either (a) map input or (b) map output or reduce output (==). Both
+    // case have different arity so we allocate for the max of both cases and pad with 0
+    // in case we have a smaller arity than the max.
+    let z_U_start = AllocatedNum::alloc_fixed_size(
       cs.namespace(|| "z_U_start"),
       arity.total_input(), // makes sure the input size allocation works for both map and reduce
+      || self.inputs.get().map(|s| &s.z_U_start),
     )?;
-    let z_U_end = inputs
-      .z_U_end
-      .alloc_fixed_size(cs.namespace(|| "z_U_end"), arity.total_output())?;
-    // Allocate z_R_start
-    let z_R_start = inputs
-      .z_R_start
-      .alloc_fixed_size(cs.namespace(|| "z_R_start"), arity.total_input())?;
+    println!("HERE 3");
+    let z_U_end =
+      AllocatedNum::alloc_fixed_size(cs.namespace(|| "z_U_end"), arity.total_output(), || {
+        self.inputs.get().map(|s| &s.z_U_end)
+      })?;
 
-    // Allocate z_R_end
-    let z_R_end = inputs
-      .z_R_end
-      .alloc_fixed_size(cs.namespace(|| "z_R_end"), arity.total_output())?;
+    println!("HERE 4");
+    // Allocate z_R_start
+    let z_R_start =
+      AllocatedNum::alloc_fixed_size(cs.namespace(|| "z_R_start"), arity.total_input(), || {
+        self.inputs.get().map(|s| &s.z_R_start)
+      })?;
 
     println!("HERE 5");
+    // Allocate z_R_end
+    let z_R_end =
+      AllocatedNum::alloc_fixed_size(cs.namespace(|| "z_R_end"), arity.total_output(), || {
+        self.inputs.get().map(|s| &s.z_R_end)
+      })?;
+
+    println!("HERE 6");
     // Allocate the running instance U
     let U: AllocatedRelaxedR1CSInstance<G> = AllocatedRelaxedR1CSInstance::alloc(
       cs.namespace(|| "Allocate U"),
@@ -536,16 +545,23 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       // we know the map is the base case and thus takes the input
       // We could also take z_U_end but in the base case, it's just simpler to think that we take the input to 
       // the map function.
-      .synthesize_map(&mut cs.namespace(|| "F_map"), &z_U_start)?;
-    let mut z_reduce_next = self
-        .mr_circuit
-        // we know exactly the reduce function takes the outputs of the two children nodes
-        .synthesize_reduce(&mut cs.namespace(|| "F_reduce"), &z_U_end, &z_R_end)?;
+      // NOTE: here we only take the right amount of input wires, since we allocated for the max between
+      // map and reduce !
+      .synthesize_map(&mut cs.namespace(|| "F_map"), &z_U_start[..arity.map_input()])?;
+    // NOTE: here we take the size of the output of the map function since it's the same as the size
+    // of the reduce function
+    let mut z_reduce_next = self.mr_circuit.synthesize_reduce(
+      &mut cs.namespace(|| "F_reduce"),
+      &z_U_end[..arity.reduce_input()],
+      &z_R_end[..arity.reduce_input()],
+    )?;
 
     if z_map_next.len() != arity.map_output() {
-      return Err(SynthesisError::IncompatibleLengthVector(
-        "z_map_next".to_string(),
-      ));
+      return Err(SynthesisError::IncompatibleLengthVector(format!(
+        "z_map_next: got {}, wanted {}",
+        z_map_next.len(),
+        arity.map_output()
+      )));
     }
 
     if z_reduce_next.len() != arity.reduce_output() {
