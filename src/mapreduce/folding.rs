@@ -156,34 +156,29 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     ),
     SynthesisError,
   > {
-    println!("HERE PARAMS");
+    println!("ALLOC PARAMS BEGIN");
     // Allocate the params
     let params = alloc_scalar_as_base::<G, _>(
       cs.namespace(|| "params"),
       self.inputs.get().map_or(None, |inputs| Some(inputs.params)),
     )?;
 
-    println!("HERE INDEXES");
     // Allocate idexes
     let i_start_U = AllocatedNum::alloc(cs.namespace(|| "i_start_U"), || {
       Ok(self.inputs.get()?.i_start_U)
     })?;
-    println!("HERE INDEXES 2");
     let i_end_U = AllocatedNum::alloc(cs.namespace(|| "i_end_U"), || {
       Ok(self.inputs.get()?.i_end_U)
     })?;
 
-    println!("HERE INDEXES 3");
     let i_start_R = AllocatedNum::alloc(cs.namespace(|| "i_start_R"), || {
       Ok(self.inputs.get()?.i_start_R)
     })?;
 
-    println!("HERE INDEXES 4");
     let i_end_R = AllocatedNum::alloc(cs.namespace(|| "i_end_R"), || {
       Ok(self.inputs.get()?.i_end_R)
     })?;
 
-    println!("HERE 2");
     // Allocate input and output vectors
     // z_U_start is either (a) map input or (b) map output or reduce output (==). Both
     // case have different arity so we allocate for the max of both cases and pad with 0
@@ -193,27 +188,23 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       arity.total_input(), // makes sure the input size allocation works for both map and reduce
       || self.inputs.get().map(|s| &s.z_U_start),
     )?;
-    println!("HERE 3");
     let z_U_end =
       AllocatedNum::alloc_fixed_size(cs.namespace(|| "z_U_end"), arity.total_output(), || {
         self.inputs.get().map(|s| &s.z_U_end)
       })?;
 
-    println!("HERE 4");
     // Allocate z_R_start
     let z_R_start =
       AllocatedNum::alloc_fixed_size(cs.namespace(|| "z_R_start"), arity.total_input(), || {
         self.inputs.get().map(|s| &s.z_R_start)
       })?;
 
-    println!("HERE 5");
     // Allocate z_R_end
     let z_R_end =
       AllocatedNum::alloc_fixed_size(cs.namespace(|| "z_R_end"), arity.total_output(), || {
         self.inputs.get().map(|s| &s.z_R_end)
       })?;
 
-    println!("HERE 6");
     // Allocate the running instance U
     let U: AllocatedRelaxedR1CSInstance<G> = AllocatedRelaxedR1CSInstance::alloc(
       cs.namespace(|| "Allocate U"),
@@ -280,7 +271,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
           .map_or(None, |T_R_U| Some(T_R_U.to_coordinates()))
       }),
     )?;
-
+    println!("ALLOC PARAMS END");
     Ok((
       params, i_start_U, i_end_U, i_start_R, i_end_R, z_U_start, z_U_end, z_R_start, z_R_end, U, u,
       R, r, T_u, T_r, T_R_U,
@@ -350,14 +341,21 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     //for e in z_U_start.clone() {
     //  ro.absorb(e);
     //}
-    for e in z_U_end {
-      ro.absorb(e);
+    for e in &z_U_end {
+      ro.absorb(e.clone());
     }
     U.absorb_in_ro(cs.namespace(|| "absorb U"), &mut ro)?;
+    println!("[+] Hash Consistency Check for U:");
+    println!("\t - U.W.X: {:?}", U.W.x.get_value());
+    println!("\t - params: {:?}", params.get_value());
+    println!("\t - i_start_U: {:?}", i_start_U.get_value());
+    println!("\t - i_end_U: {:?}", i_end_U.get_value());
+    println!("\t - z_U_end: {:?}", z_U_end[0].get_value());
 
     let hash_bits = ro.squeeze(cs.namespace(|| "Input hash first"), NUM_HASH_BITS)?;
     let hash_u = le_bits_to_num(cs.namespace(|| "bits to hash first"), hash_bits)?;
-
+    println!("  ==> Computed = {:?}", hash_u.get_value());
+    println!("  ==> Expected = {:?}", u.X0.get_value());
     let check_pass_u = alloc_num_equals(
       cs.namespace(|| "check consistency of u.X[0] with H(params, U, i, z_u_end)"),
       &u.X0,
@@ -395,6 +393,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
 
     let hash_bits = ro.squeeze(cs.namespace(|| "Input hash second"), NUM_HASH_BITS)?;
     let hash_r = le_bits_to_num(cs.namespace(|| "bits to hash second"), hash_bits)?;
+    println!("NonBaseCase: check Hash_r= {:?}", hash_r.get_value());
     let check_pass_r = alloc_num_equals(
       cs.namespace(|| "check consistency of r.X[0] with H(params, R, i, z_r_start, z_r_end)"),
       &r.X0,
@@ -428,7 +427,12 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       &check_pass_u,
       &check_pass_r,
     )?;
-
+    println!(
+      "NonBaseCase: CheckPassU: {:?}, CheckPassR: {:?}, HashChecks: {:?}",
+      check_pass_u.get_value(),
+      check_pass_r.get_value(),
+      hashChecks.get_value()
+    );
     Ok((U_R_fold, hashChecks))
   }
 }
@@ -584,7 +588,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       self.ro_consts,
       NUM_FE_WITHOUT_IO_FOR_CRHF + arity.total_output() + 1,
     );
-    ro.absorb(params);
+    ro.absorb(params.clone());
     ro.absorb(i_start_U.clone());
     ro.absorb(i_end_R.clone());
     // NOTE: this is commented out in the case of mapreduce or general PCD, because
@@ -604,13 +608,21 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     //for e in z_U_start {
     //  ro.absorb(e);
     //}
-    for e in z_output {
-      ro.absorb(e);
+    for e in &z_output {
+      ro.absorb(e.clone());
     }
     Unew.absorb_in_ro(cs.namespace(|| "absorb U_new"), &mut ro)?;
 
+    println!("[+] Hash Output X0:");
+    println!("\t - params: {:?}", params.get_value());
+    println!("\t - i_start_U: {:?}", i_start_U.get_value());
+    println!("\t - i_end_U: {:?}", i_end_U.get_value());
+    println!("\t - z_output: {:?}", z_output[0].get_value());
+    println!("\t - Unew.W.x: {:?}", Unew.W.x.get_value());
+
     let hash_bits = ro.squeeze(cs.namespace(|| "output hash bits"), NUM_HASH_BITS)?;
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
+    println!(" ==> X0 H = {:?}\n", hash.get_value());
 
     // Outputs the computed hash and u.X[1] that corresponds to the hash of the other circuit
     hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;

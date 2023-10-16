@@ -243,13 +243,15 @@ where
   ) -> Result<Self, NovaError> {
     // base case for the primary
     let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
+    let mut test_cs_primary = TestConstraintSystem::new();
+
     let inputs_primary: NovaAugmentedParallelCircuitInputs<G2> =
       NovaAugmentedParallelCircuitInputs::new(
         pp.r1cs_shape_secondary.get_digest(),
         G1::Scalar::from(i.try_into().unwrap()),
         G1::Scalar::from((i).try_into().unwrap()),
         // we do this to satisfy the constraint in the augmented circuit
-        // that left_end == right_start which is in the base case as well
+        // that left_end + 1 == right_start (which happens for both cases)
         G1::Scalar::from((i + 1).try_into().unwrap()),
         G1::Scalar::from((i + 1).try_into().unwrap()),
         z_start_primary.clone(),
@@ -271,7 +273,12 @@ where
       c_primary.clone(),
       pp.ro_consts_circuit_primary.clone(),
     );
-    let _ = circuit_primary.synthesize(&mut cs_primary)?;
+    let _ = circuit_primary.clone().synthesize(&mut cs_primary)?;
+    if false {
+      let _ = circuit_primary.synthesize(&mut test_cs_primary)?;
+      println!("{:?}", test_cs_primary.which_is_unsatisfied());
+    }
+
     let (u_primary, w_primary) =
       cs_primary.r1cs_instance_and_witness(&pp.r1cs_shape_primary, &pp.ck_primary)?;
 
@@ -332,10 +339,18 @@ where
     }
 
     let i_start = i;
-    let i_end = i + 1;
+    // For base case, our range is still [i,i], we haven't proven any range outside
+    // of that. At the merge level, we're gonna prove [i, i+1] range though.
+    let i_end = i;
     // base case is map step
     let z_end_primary = c_primary.output_map(&z_start_primary);
     let z_end_secondary = c_secondary.output_map(&z_start_secondary);
+
+    println!(
+      " !! End of MAP step: U_primary.W.x: {:?}",
+      U_primary.comm_W.to_coordinates()
+    );
+    println!(" !! End of MAP step: u_primary.X0: {:?}", u_primary.X[0]);
 
     Ok(Self {
       pp: pp,
@@ -365,10 +380,10 @@ where
   pub fn reduce(self, nright: TreeNode<'a, G1, G2, C1, C2>) -> Result<Self, NovaError> {
     let left = self.data;
     let right = nright.data;
-    // NOTE: a major difference with the original PSE code is that we do not let a "space" between
-    // two leaves. All leaves are assigned consecutive indices.
-    // Ex: base leaf [0->1] [1->2] , when    // Ex: base leaf [0->1] [1->2] , when we merge, final indices are [0->2]]
-    if left.i_end != right.i_start {
+    // Since there are independent leaves, there is no connection between two ranges
+    // For example, [0,0] [1,1] are independently proving the computation, as two independent
+    // IVC "lines". When we merge, we merge the indices to [0,1].
+    if left.i_end + 1 != right.i_start {
       return Err(NovaError::InvalidNodeMerge);
     }
 
@@ -407,8 +422,6 @@ where
 
     // Next we construct a proof of this folding and of the invocation of F
 
-    let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
-
     let inputs_primary: NovaAugmentedParallelCircuitInputs<G2> =
       NovaAugmentedParallelCircuitInputs::new(
         self.pp.r1cs_shape_secondary.get_digest(),
@@ -435,11 +448,17 @@ where
       self.c_primary.clone(),
       self.pp.ro_consts_circuit_primary.clone(),
     );
-    let _ = circuit_primary.synthesize(&mut cs_primary);
+    let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
+    let mut test_cs_primary = TestConstraintSystem::new();
+    let _ = circuit_primary.clone().synthesize(&mut cs_primary);
+    if false {
+      let _ = circuit_primary.synthesize(&mut test_cs_primary)?;
+      println!("UNSATISFIED PRIMARY CIRCUIT");
+      println!("\t{:?}", test_cs_primary.which_is_unsatisfied());
+    }
 
-    let (u_primary, w_primary) = cs_primary
-      .r1cs_instance_and_witness(&self.pp.r1cs_shape_primary, &self.pp.ck_primary)
-      .map_err(|_e| NovaError::UnSat)?;
+    let (u_primary, w_primary) =
+      cs_primary.r1cs_instance_and_witness(&self.pp.r1cs_shape_primary, &self.pp.ck_primary)?;
 
     let u_primary = RelaxedR1CSInstance::from_r1cs_instance(
       &self.pp.ck_primary,
@@ -482,6 +501,10 @@ where
 
     // Next we construct a proof of this folding in the secondary curve
     let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
+    println!(
+      " -- MERGE STEP: Left.u_primary.X0 == {:?}",
+      left.u_primary.X[0]
+    );
 
     let inputs_secondary: NovaAugmentedParallelCircuitInputs<G1> =
       NovaAugmentedParallelCircuitInputs::<G1>::new(
@@ -502,18 +525,21 @@ where
         Some(Commitment::<G1>::decompress(&nifs_right_primary.comm_T)?),
         Some(Commitment::<G1>::decompress(&nifs_primary.comm_T)?),
       );
-
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
       self.pp.augmented_circuit_params_secondary.clone(),
       Some(inputs_secondary),
       self.c_secondary.clone(),
       self.pp.ro_consts_circuit_secondary.clone(),
     );
-    let _ = circuit_secondary.synthesize(&mut cs_secondary);
-
+    let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
+    if false {
+      let mut test_cs_secondary = TestConstraintSystem::new();
+      let _ = circuit_secondary.synthesize(&mut test_cs_secondary)?;
+      println!("UNSATISFIED SECONDARY CIRCUIT");
+      println!("\t{:?}", test_cs_primary.which_is_unsatisfied());
+    }
     let (u_secondary, w_secondary) = cs_secondary
-      .r1cs_instance_and_witness(&self.pp.r1cs_shape_secondary, &self.pp.ck_secondary)
-      .map_err(|_e| NovaError::UnSat)?;
+      .r1cs_instance_and_witness(&self.pp.r1cs_shape_secondary, &self.pp.ck_secondary)?;
 
     // Give these a trivial error vector
     let u_secondary = RelaxedR1CSInstance::from_r1cs_instance(
@@ -582,6 +608,40 @@ where
         z_end_secondary,
       },
     })
+  }
+
+  // TODO: currently just check the shape, need to verify hash consistency
+  #[cfg(test)]
+  fn verify(&self) -> Result<(), NovaError> {
+    self
+      .pp
+      .r1cs_shape_primary
+      .is_sat_relaxed(
+        &self.pp.ck_primary,
+        &self.data.U_primary,
+        &self.data.W_primary,
+      )
+      .and_then(|_| {
+        self.pp.r1cs_shape_primary.is_sat_relaxed(
+          &self.pp.ck_primary,
+          &self.data.u_primary,
+          &self.data.w_primary,
+        )
+      })
+      .and_then(|_| {
+        self.pp.r1cs_shape_secondary.is_sat_relaxed(
+          &self.pp.ck_secondary,
+          &self.data.U_secondary,
+          &self.data.W_secondary,
+        )
+      })
+      .and_then(|_| {
+        self.pp.r1cs_shape_secondary.is_sat_relaxed(
+          &self.pp.ck_secondary,
+          &self.data.u_secondary,
+          &self.data.w_secondary,
+        )
+      })
   }
 }
 
@@ -734,7 +794,7 @@ mod tests {
 
   use eyre::Result;
   #[test]
-  fn test_parallel_combine_two_ivc() -> Result<()> {
+  fn test_mapreduce_single() -> Result<()> {
     // produce public parameters
     let pp = PublicParams::<
       G1,
@@ -742,28 +802,38 @@ mod tests {
       AverageCircuit<<G1 as Group>::Scalar>,
       TrivialTestCircuit<<G2 as Group>::Scalar>,
     >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
+    let one = <G1 as Group>::Scalar::one();
+    let two = one + one;
+    let one2 = <G2 as Group>::Scalar::one();
+    let two2 = one2 + one2;
+    let four2 = two2 + two2;
 
-    // produce a recursive SNARK
+    println!(" --- FIRST LEAF PROVING ---");
     let leaf_0 = TreeNode::map_step(
       &pp,
       AverageCircuit::default(),
       TrivialTestCircuit::default(),
       0,
-      vec![<G1 as Group>::Scalar::one()],
-      vec![<G2 as Group>::Scalar::one()],
+      vec![one],
+      vec![four2],
     )?;
+    leaf_0.verify()?;
 
+    println!(" --- SECOND LEAF PROVING ---");
     let leaf_1 = TreeNode::map_step(
       &pp,
       AverageCircuit::default(),
       TrivialTestCircuit::default(),
       1,
-      vec![<G1 as Group>::Scalar::one()],
-      vec![<G2 as Group>::Scalar::one()],
+      vec![two],
+      vec![four2],
     )?;
 
-    let res_2 = leaf_0.reduce(leaf_1);
-    assert!(res_2.is_ok());
+    leaf_1.verify()?;
+
+    println!(" --- MERGE PROVING ---");
+    let merged = leaf_0.reduce(leaf_1)?;
+    merged.verify()?;
     Ok(())
   }
 }

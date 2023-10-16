@@ -42,7 +42,7 @@ use errors::NovaError;
 use ff::{Field};
 use gadgets::utils::scalar_as_base;
 use nifs::NIFS;
-use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness};
+use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, };
 use serde::{Deserialize, Serialize};
 use traits::{
   circuit::StepCircuit,
