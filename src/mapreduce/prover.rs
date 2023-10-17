@@ -243,7 +243,6 @@ where
   ) -> Result<Self, NovaError> {
     // base case for the primary
     let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
-    let mut test_cs_primary = TestConstraintSystem::new();
 
     let inputs_primary: NovaAugmentedParallelCircuitInputs<G2> =
       NovaAugmentedParallelCircuitInputs::new(
@@ -273,14 +272,31 @@ where
       c_primary.clone(),
       pp.ro_consts_circuit_primary.clone(),
     );
+    println!("---- MAP primary circuit ----");
     let _ = circuit_primary.clone().synthesize(&mut cs_primary)?;
     if false {
+      println!("---- MAP primary TEST circuit ----");
+      let mut test_cs_primary = TestConstraintSystem::new();
       let _ = circuit_primary.synthesize(&mut test_cs_primary)?;
-      println!("{:?}", test_cs_primary.which_is_unsatisfied());
+      if !test_cs_primary.is_satisfied() {
+        println!(
+          "primary map unsatisfied: {:?}",
+          test_cs_primary.which_is_unsatisfied()
+        );
+        panic!("unsatisfied primary map");
+      }
     }
 
     let (u_primary, w_primary) =
       cs_primary.r1cs_instance_and_witness(&pp.r1cs_shape_primary, &pp.ck_primary)?;
+
+    // Transform the R1CS into relaxed R1CS so we can give it to the circuit on the other side of the cycle
+    // At first step, u must be folded with an empty instance.
+    let w_primary = RelaxedR1CSWitness::from_r1cs_witness(&pp.r1cs_shape_primary, &w_primary);
+    let u_primary =
+      RelaxedR1CSInstance::from_r1cs_instance(&pp.ck_primary, &pp.r1cs_shape_primary, &u_primary);
+    let W_primary = w_primary.clone();
+    let U_primary = u_primary.clone();
 
     // base case for the secondary
     let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
@@ -297,7 +313,7 @@ where
         z_start_secondary.clone(),
         z_start_secondary.clone(),
         None,
-        None,
+        Some(u_primary.clone()),
         None,
         None,
         None,
@@ -310,16 +326,23 @@ where
       c_secondary.clone(),
       pp.ro_consts_circuit_secondary.clone(),
     );
-    let _ = circuit_secondary.synthesize(&mut cs_secondary);
+
+    println!("---- MAP secondary circuit ----");
+    let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
     let (u_secondary, w_secondary) =
       cs_secondary.r1cs_instance_and_witness(&pp.r1cs_shape_secondary, &pp.ck_secondary)?;
-
-    // IVC proof for the primary circuit
-    let w_primary = RelaxedR1CSWitness::from_r1cs_witness(&pp.r1cs_shape_primary, &w_primary);
-    let u_primary =
-      RelaxedR1CSInstance::from_r1cs_instance(&pp.ck_primary, &pp.r1cs_shape_primary, &u_primary);
-    let W_primary = w_primary.clone();
-    let U_primary = u_primary.clone();
+    if true {
+      println!("---- MAP secondary TEST circuit ----");
+      let mut test_cs_secondary = TestConstraintSystem::new();
+      let _ = circuit_secondary.synthesize(&mut test_cs_secondary)?;
+      if !test_cs_secondary.is_satisfied() {
+        println!(
+          "secondary map unsatisfied: {:?}",
+          test_cs_secondary.which_is_unsatisfied()
+        );
+        panic!("unsatisfied secondary map");
+      }
+    }
 
     // IVC proof of the secondary circuit
     let w_secondary =
@@ -329,8 +352,14 @@ where
       &pp.r1cs_shape_secondary,
       &u_secondary,
     );
-    let W_secondary = w_secondary.clone();
-    let U_secondary = u_secondary.clone();
+    // At the base case, the running instance for the secondary circuit is null since we only executed
+    // one step of the function, so previous steps are "null".
+    // On the other hand, for the primary circuit, we executed one step of the function and one folding already.
+    //let W_secondary = w_secondary.clone();
+    //let U_secondary = u_secondary.clone();
+    let W_secondary = RelaxedR1CSWitness::<G2>::default(&pp.r1cs_shape_secondary);
+    let U_secondary =
+      RelaxedR1CSInstance::<G2>::default(&pp.ck_secondary, &pp.r1cs_shape_secondary);
 
     if z_start_primary.len() != pp.F_arity_primary.total_input()
       || z_start_secondary.len() != pp.F_arity_secondary.total_input()
@@ -339,9 +368,7 @@ where
     }
 
     let i_start = i;
-    // For base case, our range is still [i,i], we haven't proven any range outside
-    // of that. At the merge level, we're gonna prove [i, i+1] range though.
-    let i_end = i;
+    let i_end = i + 1;
     // base case is map step
     let z_end_primary = c_primary.output_map(&z_start_primary);
     let z_end_secondary = c_secondary.output_map(&z_start_secondary);
@@ -350,7 +377,21 @@ where
       " !! End of MAP step: U_primary.W.x: {:?}",
       U_primary.comm_W.to_coordinates()
     );
+    println!(
+      " !! End of MAP step: U_secondary.W.x: {:?}",
+      U_secondary.comm_W.to_coordinates()
+    );
+
     println!(" !! End of MAP step: u_primary.X0: {:?}", u_primary.X[0]);
+    println!(" !! End of MAP step: u_primary.X1: {:?}", u_primary.X[1]);
+    println!(
+      " !! End of MAP step: u_secondary.X0: {:?}",
+      u_secondary.X[0]
+    );
+    println!(
+      " !! End of MAP step: u_secondary.X1: {:?}",
+      u_secondary.X[1]
+    );
 
     Ok(Self {
       pp: pp,
@@ -381,9 +422,9 @@ where
     let left = self.data;
     let right = nright.data;
     // Since there are independent leaves, there is no connection between two ranges
-    // For example, [0,0] [1,1] are independently proving the computation, as two independent
-    // IVC "lines". When we merge, we merge the indices to [0,1].
-    if left.i_end + 1 != right.i_start {
+    // For example, [0,1] [1,2] are independently proving the computation, as two independent
+    // IVC "lines". When we merge, we merge the indices to [0,2].
+    if left.i_end != right.i_start {
       return Err(NovaError::InvalidNodeMerge);
     }
 
@@ -448,13 +489,17 @@ where
       self.c_primary.clone(),
       self.pp.ro_consts_circuit_primary.clone(),
     );
+
+    println!("----- MERGE primary circuit ----");
     let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
-    let mut test_cs_primary = TestConstraintSystem::new();
     let _ = circuit_primary.clone().synthesize(&mut cs_primary);
-    if false {
+    if true {
+      println!("----- MERGE primary TEST circuit ----");
+      let mut test_cs_primary = TestConstraintSystem::new();
       let _ = circuit_primary.synthesize(&mut test_cs_primary)?;
-      println!("UNSATISFIED PRIMARY CIRCUIT");
+      println!("!! UNSATISFIED MERGE PRIMARY CIRCUIT !!");
       println!("\t{:?}", test_cs_primary.which_is_unsatisfied());
+      panic!("unsatisfied merge primary circuit");
     }
 
     let (u_primary, w_primary) =
@@ -467,6 +512,7 @@ where
     );
     let w_primary = RelaxedR1CSWitness::from_r1cs_witness(&self.pp.r1cs_shape_primary, &w_primary);
 
+    println!("----- MERGE secondary circuit ----");
     // Now we fold the instances of the primary proof
     let (nifs_left_primary, (left_U_primary, left_W_primary)) = NIFS::prove(
       &self.pp.ck_primary,
@@ -533,10 +579,11 @@ where
     );
     let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
     if false {
+      println!("----- MERGE secondary TEST circuit ----");
       let mut test_cs_secondary = TestConstraintSystem::new();
       let _ = circuit_secondary.synthesize(&mut test_cs_secondary)?;
       println!("UNSATISFIED SECONDARY CIRCUIT");
-      println!("\t{:?}", test_cs_primary.which_is_unsatisfied());
+      println!("\t{:?}", test_cs_secondary.which_is_unsatisfied());
     }
     let (u_secondary, w_secondary) = cs_secondary
       .r1cs_instance_and_witness(&self.pp.r1cs_shape_secondary, &self.pp.ck_secondary)?;

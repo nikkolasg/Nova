@@ -594,9 +594,9 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
 
     // Outputs the computed hash and u.X[1] that corresponds to the hash of the other circuit
-    hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
     u.X1
       .inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
+    hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
     // r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
 
     Ok(())

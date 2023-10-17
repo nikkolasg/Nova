@@ -525,6 +525,29 @@ where
       _p_c2: Default::default(),
     })
   }
+  #[cfg(test)]
+  fn verify(&self, pp: &PublicParams<G1, G2, C1, C2>) -> Result<(), NovaError> {
+    pp.r1cs_shape_primary
+      .is_sat_relaxed(&pp.ck_primary, &self.U_primary, &self.W_primary)
+      .and_then(|_| {
+        pp.r1cs_shape_primary
+          .is_sat_relaxed(&pp.ck_primary, &self.u_primary, &self.w_primary)
+      })
+      .and_then(|_| {
+        pp.r1cs_shape_secondary.is_sat_relaxed(
+          &pp.ck_secondary,
+          &self.U_secondary,
+          &self.W_secondary,
+        )
+      })
+      .and_then(|_| {
+        pp.r1cs_shape_secondary.is_sat_relaxed(
+          &pp.ck_secondary,
+          &self.u_secondary,
+          &self.w_secondary,
+        )
+      })
+  }
 }
 
 /// Structure for parallelization
@@ -801,7 +824,7 @@ mod tests {
   }
 
   #[test]
-  fn test_parallel_combine_two_ivc() {
+  fn test_parallel_combine_two_ivc() -> Result<(), NovaError> {
     // produce public parameters
     let pp = PublicParams::<
       G1,
@@ -823,6 +846,7 @@ mod tests {
     );
     assert!(res_0.is_ok());
     let recursive_snark_0 = res_0.unwrap();
+    recursive_snark_0.verify(&pp)?;
 
     let res_1 = NovaTreeNode::new(
       &pp,
@@ -836,6 +860,7 @@ mod tests {
     );
     assert!(res_1.is_ok());
     let recursive_snark = res_1.unwrap();
+    recursive_snark.verify(&pp)?;
 
     let res_2 = recursive_snark_0.merge(
       recursive_snark,
@@ -844,5 +869,8 @@ mod tests {
       &CubicCircuit::default(),
     );
     assert!(res_2.is_ok());
+    let n2 = res_2.unwrap();
+    n2.verify(&pp)?;
+    Ok(())
   }
 }

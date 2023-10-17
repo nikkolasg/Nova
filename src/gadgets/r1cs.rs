@@ -198,7 +198,6 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     ro: &mut G::ROCircuit,
   ) -> Result<(), SynthesisError> {
     ro.absorb(self.W.x.clone());
-    println!("\t - U.W.x = {:?}", self.W.x.get_value());
     ro.absorb(self.W.y.clone());
     ro.absorb(self.W.is_infinity.clone());
     ro.absorb(self.E.x.clone());

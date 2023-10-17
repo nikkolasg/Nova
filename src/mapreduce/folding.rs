@@ -156,7 +156,6 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     ),
     SynthesisError,
   > {
-    println!("ALLOC PARAMS BEGIN");
     // Allocate the params
     let params = alloc_scalar_as_base::<G, _>(
       cs.namespace(|| "params"),
@@ -271,7 +270,6 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
           .map_or(None, |T_R_U| Some(T_R_U.to_coordinates()))
       }),
     )?;
-    println!("ALLOC PARAMS END");
     Ok((
       params, i_start_U, i_end_U, i_start_R, i_end_R, z_U_start, z_U_end, z_R_start, z_R_end, U, u,
       R, r, T_u, T_r, T_R_U,
@@ -486,7 +484,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       &left_io_equal,
       &right_io_equal,
     )?;
-
+    println!("[+] is BASE CASE ? {:?}", is_base_case.get_value());
     // Synthesize the circuit for the base case and get the new running instance
     let Unew_base = self.synthesize_base_case(cs.namespace(|| "base case"), u.clone())?;
 
@@ -533,7 +531,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       &Boolean::from(is_base_case.clone()),
     )?;
 
-    // Compute i_u_end + 1 == i_r_start,
+    // Compute i_u_end +1== i_r_start,
     // [l_start, l_end] and [r_start, r_end] and we need to make sure we're reducing two consecutive ranges
     // (actually this should not even be needed in the general case as reduce step is associative
     // but let's put it there for the time being for the sake of staying closer to PSE parallel code).
@@ -613,7 +611,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     }
     Unew.absorb_in_ro(cs.namespace(|| "absorb U_new"), &mut ro)?;
 
-    println!("[+] Hash Output X0:");
+    println!("[+] Hash Output X1:");
     println!("\t - params: {:?}", params.get_value());
     println!("\t - i_start_U: {:?}", i_start_U.get_value());
     println!("\t - i_end_U: {:?}", i_end_U.get_value());
@@ -622,12 +620,11 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
 
     let hash_bits = ro.squeeze(cs.namespace(|| "output hash bits"), NUM_HASH_BITS)?;
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
-    println!(" ==> X0 H = {:?}\n", hash.get_value());
+    println!(" ==> X1 H = {:?}\n", hash.get_value());
 
-    // Outputs the computed hash and u.X[1] that corresponds to the hash of the other circuit
-    hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
     u.X1
       .inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
+    hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
     // r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
 
     Ok(())
