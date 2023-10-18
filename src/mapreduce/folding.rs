@@ -14,8 +14,8 @@ use crate::{
     ecc::AllocatedPoint,
     r1cs::{AllocatedR1CSInstance, AllocatedRelaxedR1CSInstance},
     utils::{
-      alloc_num_equals, alloc_scalar_as_base, conditionally_select_vec, le_bits_to_num,
-      FixedSizeAllocator, ResizeAllocator,
+      alloc_num_equals, alloc_scalar_as_base, conditionally_select, conditionally_select_vec,
+      le_bits_to_num, FixedSizeAllocator, ResizeAllocator,
     },
   },
   mapreduce::circuit::{MapReduceArity, MapReduceCircuit},
@@ -474,6 +474,10 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       &i_start_U.clone(),
       &i_end_U,
     )?;
+    // even though we don't use anything from the right side in base case, it's important
+    // to check that they're equal. Later in the circuit, we check that i_end_U + 1 == i_start R
+    // so we also need to enforce that i_end_R == i_start_R in base case otherwise the resulting range
+    // [i_start_U, i_end_R] could be anything because i_end_R would not be constrained.
     let right_io_equal = alloc_num_equals(
       cs.namespace(|| "In base case i_start_R == i_end_R"),
       &i_start_R,
@@ -530,14 +534,32 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       Unew_non_base,
       &Boolean::from(is_base_case.clone()),
     )?;
-
-    // Compute i_u_end +1== i_r_start,
-    // [l_start, l_end] and [r_start, r_end] and we need to make sure we're reducing two consecutive ranges
-    // (actually this should not even be needed in the general case as reduce step is associative
-    // but let's put it there for the time being for the sake of staying closer to PSE parallel code).
+    // Compute i_U_end + 1 for base case
+    let i_end_U_base = AllocatedNum::alloc(cs.namespace(|| "i_U_end + 1"), || {
+      Ok(*i_end_U.get_value().get()? + G::Base::one())
+    })?;
+    cs.enforce(
+      || "check new computed i_end_U + 1",
+      |lc| lc,
+      |lc| lc,
+      |lc| lc + i_end_U_base.get_variable() - CS::one() - i_end_U.get_variable(),
+    );
+    let i_end_U_new = conditionally_select(
+      cs.namespace(|| "choose i_end_U in base vs nonbase case"),
+      &i_end_U_base,
+      &i_end_U,
+      &Boolean::from(is_base_case.clone()),
+    )?;
+    // Then check the range equation to make sure the right instance starts at the same index than the left instance
+    // is ending
+    // NOTE: this is in theory strictly not neeeded as reduce step is associative but in things get messy in the constraints
+    // world so we force this consecutive range.
+    // Example:
+    //  * in base case, we initially have [0,0] [1,1]. Then i_U_end_new = 1 so condition checks out, output range is [0,1]
+    //  * in non base case, we have for example [0,1] [1,2]. Then i_U_end_new = 1 (no adding via condition above).
     cs.enforce(
       || "check consecutive range",
-      |lc| lc + i_end_U.get_variable() + CS::one(),
+      |lc| lc + i_end_U_new.get_variable(),
       |lc| lc + CS::one(),
       |lc| lc + i_start_R.get_variable(),
     );

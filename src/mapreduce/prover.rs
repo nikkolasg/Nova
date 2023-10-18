@@ -50,6 +50,7 @@ use bellperson::{
     test::TestConstraintSystem,
     Assignment,
   },
+  util_cs::test_cs,
   Circuit, ConstraintSystem, Index, SynthesisError,
 };
 use core::marker::PhantomData;
@@ -497,9 +498,11 @@ where
       println!("----- MERGE primary TEST circuit ----");
       let mut test_cs_primary = TestConstraintSystem::new();
       let _ = circuit_primary.synthesize(&mut test_cs_primary)?;
-      println!("!! UNSATISFIED MERGE PRIMARY CIRCUIT !!");
+      println!("\t--> Are there unsatisfied constraints ?");
       println!("\t{:?}", test_cs_primary.which_is_unsatisfied());
-      panic!("unsatisfied merge primary circuit");
+      if !test_cs_primary.is_satisfied() {
+        panic!("unsatisfied merge primary circuit");
+      }
     }
 
     let (u_primary, w_primary) =
@@ -564,6 +567,9 @@ where
         right.z_start_secondary,
         right.z_end_secondary.clone(),
         Some(left.U_primary),
+        // left.u_primary has already been folded -> we need to input the previous fold
+        // but there is only one fresh instance that proves execution of F by taking left and right
+        // u already. So one input will be "unused".
         Some(left.u_primary),
         Some(right.U_primary),
         Some(right.u_primary),
@@ -578,12 +584,15 @@ where
       self.pp.ro_consts_circuit_secondary.clone(),
     );
     let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
-    if false {
+    if true {
       println!("----- MERGE secondary TEST circuit ----");
       let mut test_cs_secondary = TestConstraintSystem::new();
       let _ = circuit_secondary.synthesize(&mut test_cs_secondary)?;
-      println!("UNSATISFIED SECONDARY CIRCUIT");
+      println!("\t--> Are there unsatisfied constraints ?");
       println!("\t{:?}", test_cs_secondary.which_is_unsatisfied());
+      if !test_cs_secondary.is_satisfied() {
+        panic!("Unsatisfied secondary circuit");
+      }
     }
     let (u_secondary, w_secondary) = cs_secondary
       .r1cs_instance_and_witness(&self.pp.r1cs_shape_secondary, &self.pp.ck_secondary)?;
