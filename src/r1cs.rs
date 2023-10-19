@@ -122,9 +122,10 @@ impl<G: Group> R1CSShape<G> {
     }
 
     // We require the number of public inputs/outputs to be even
-    if num_io % 2 != 0 {
-      return Err(NovaError::OddInputLength);
-    }
+    // WHY ?? In mapreduce there are three IO
+    //if num_io % 2 != 0 {
+    //  return Err(NovaError::OddInputLength);
+    //}
 
     let digest = Self::compute_digest(num_cons, num_vars, num_io, A, B, C);
 

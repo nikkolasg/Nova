@@ -647,7 +647,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     u.X1
       .inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
     hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
-    // r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
+    r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
 
     Ok(())
   }
