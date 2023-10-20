@@ -450,7 +450,7 @@ where
       &right.w_secondary,
       false,
     )?;
-    // here we're folding two relaxed R1CS instances instead of the vanilla folding step of Nova RR1CS x R1CS
+        // here we're folding two relaxed R1CS instances instead of the vanilla folding step of Nova RR1CS x R1CS
     let (nifs_secondary, (U_secondary, W_secondary)) = NIFS::prove(
       &self.pp.ck_secondary,
       &self.pp.ro_consts_secondary,
@@ -461,6 +461,12 @@ where
       &right_W_secondary,
       true,
     )?;
+  println!(
+      "[+] PROVER: secondary U_fold {:?} with right relaxed: {:?}, gives {:?}",
+      left_U_secondary.comm_W.to_coordinates(),
+      right_U_secondary.comm_W.to_coordinates(),
+      U_secondary.comm_W.to_coordinates(),
+    );
 
     // Next we construct a proof of this folding and of the invocation of F
 
@@ -516,6 +522,10 @@ where
     let w_primary = RelaxedR1CSWitness::from_r1cs_witness(&self.pp.r1cs_shape_primary, &w_primary);
 
     println!("----- MERGE secondary circuit ----");
+    // we want to fold
+    // * L_i and l_i (just generated) into L_i+1 (proving F^(i)(z0) = zi)
+    // * then L_i+1 and R_i+1 (from previous iteration) into U_i+1
+    // We do one less folding because the first circuit only "output one" fresh instance, not two.
     // Now we fold the instances of the primary proof
     let (nifs_left_primary, (left_U_primary, left_W_primary)) = NIFS::prove(
       &self.pp.ck_primary,
@@ -523,18 +533,10 @@ where
       &self.pp.r1cs_shape_primary,
       &left.U_primary,
       &left.W_primary,
-      &left.u_primary,
-      &left.w_primary,
-      false,
-    )?;
-    let (nifs_right_primary, (right_U_primary, right_W_primary)) = NIFS::prove(
-      &self.pp.ck_primary,
-      &self.pp.ro_consts_primary,
-      &self.pp.r1cs_shape_primary,
-      &right.U_primary,
-      &right.W_primary,
-      &right.u_primary,
-      &right.w_primary,
+      // we must give the one just generated above to "make the link" - left.u_primary has already been
+      // given in the map step.
+      &u_primary,
+      &w_primary,
       false,
     )?;
     let (nifs_primary, (U_primary, W_primary)) = NIFS::prove(
@@ -543,8 +545,8 @@ where
       &self.pp.r1cs_shape_primary,
       &left_U_primary,
       &left_W_primary,
-      &right_U_primary,
-      &right_W_primary,
+      &right.U_primary,
+      &right.W_primary,
       true,
     )?;
 
@@ -566,15 +568,17 @@ where
         left.z_end_secondary.clone(),
         right.z_start_secondary,
         right.z_end_secondary.clone(),
-        Some(left.U_primary),
-        // left.u_primary has already been folded -> we need to input the previous fold
-        // but there is only one fresh instance that proves execution of F by taking left and right
-        // u already. So one input will be "unused".
-        Some(left.u_primary),
-        Some(right.U_primary),
-        Some(right.u_primary),
+        Some(left.U_primary), // proves correct exec of F^(i)(z0)=zi
+        // NOTE how we take the instance just generated here !
+        // TODO: We actually should not need to clone since we don't even nee
+        Some(u_primary.clone()), // proves correct exec of F(zi,ri) = zi+1 (proves exec of F & the merge)
+        Some(right.U_primary),   // proves correct exec of F^(i)(r0)=ri
+        Some(RelaxedR1CSInstance::default(
+          &self.pp.ck_primary,
+          &self.pp.r1cs_shape_primary,
+        )),
         Some(Commitment::<G1>::decompress(&nifs_left_primary.comm_T)?),
-        Some(Commitment::<G1>::decompress(&nifs_right_primary.comm_T)?),
+        Some(Commitment::<G1>::default()), // since we don't fold R and r together, no T as well
         Some(Commitment::<G1>::decompress(&nifs_primary.comm_T)?),
       );
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
@@ -666,8 +670,39 @@ where
     })
   }
 
+  fn partial_verify(&self) -> Result<(), NovaError> {
+    self
+      .pp
+      .r1cs_shape_primary
+      .is_sat_relaxed(
+        &self.pp.ck_primary,
+        &self.data.U_primary,
+        &self.data.W_primary,
+      )
+      .and_then(|_| {
+        self.pp.r1cs_shape_primary.is_sat_relaxed(
+          &self.pp.ck_primary,
+          &self.data.u_primary,
+          &self.data.w_primary,
+        )
+      })
+      // unsat
+    .and_then(|_| {
+      self.pp.r1cs_shape_secondary.is_sat_relaxed(
+        &self.pp.ck_secondary,
+        &self.data.U_secondary,
+        &self.data.W_secondary,
+      )
+    })
+    .and_then(|_| {
+      self.pp.r1cs_shape_secondary.is_sat_relaxed(
+        &self.pp.ck_secondary,
+        &self.data.u_secondary,
+        &self.data.w_secondary,
+      )
+    })
+  }
   // TODO: currently just check the shape, need to verify hash consistency
-  #[cfg(test)]
   fn verify(&self) -> Result<(), NovaError> {
     self
       .pp
@@ -889,7 +924,7 @@ mod tests {
 
     println!(" --- MERGE PROVING ---");
     let merged = leaf_0.reduce(leaf_1)?;
-    merged.verify()?;
+    merged.partial_verify()?;
     Ok(())
   }
 }

@@ -14,8 +14,8 @@ use crate::{
     ecc::AllocatedPoint,
     r1cs::{AllocatedR1CSInstance, AllocatedRelaxedR1CSInstance},
     utils::{
-      alloc_num_equals, alloc_scalar_as_base, conditionally_select, conditionally_select_vec,
-      le_bits_to_num, FixedSizeAllocator, ResizeAllocator,
+      alloc_num_equals, alloc_scalar_as_base, alloc_zero, conditionally_select,
+      conditionally_select_vec, le_bits_to_num, FixedSizeAllocator, ResizeAllocator,
     },
   },
   mapreduce::circuit::{MapReduceArity, MapReduceCircuit},
@@ -324,6 +324,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     T_r: AllocatedPoint<G>,
     T_R_U: AllocatedPoint<G>,
     arity: MapReduceArity,
+    is_base_case: &AllocatedBit,
   ) -> Result<(AllocatedRelaxedR1CSInstance<G>, AllocatedBit), SynthesisError> {
     // Check that u.x[0] = Hash(params, i_start_U, i_end_U, z_U_end, U)
     let mut ro = G::ROCircuit::new(
@@ -364,11 +365,39 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     let U_fold = U.fold_with_r1cs(
       cs.namespace(|| "compute fold of U and u"),
       params.clone(),
-      u,
+      u.clone(), // ARGH. All these function should take a reference.
       T_u,
       self.ro_consts.clone(),
       self.params.limb_width,
       self.params.n_limbs,
+    )?;
+
+    // CHECK if we are in secondary circuit: if we are, then the folding operates a little bit differently.
+    // In first circuit, we operate  as per the book.
+    // In second circuit, we don't take "r" as it is null, but we take u.X1, because it comes from the previous circuit
+    // on the first curve that already "merged" right and left.
+    // To check if we are on second circuit,we enforce that the right instance is null. We here simply check if
+    // the first input is 0 or not (assuming we're not in base case).
+    let zero_num = &alloc_zero(cs.namespace(|| "alloczero"))?;
+    let is_r_instance_zero = alloc_num_equals(
+      cs.namespace(|| "check right instance zero"),
+      &r.X0,
+      &zero_num,
+    )?;
+    let is_nonbase_secondary = AllocatedBit::and_not(
+      cs.namespace(|| "check if we are in non base case & secondary circuit"),
+      &is_r_instance_zero,
+      &is_base_case,
+    )?;
+    println!(
+      "[+] is SECONDARY Non Base circuit ? {:?} ",
+      is_nonbase_secondary.get_value()
+    );
+    let right_io = conditionally_select(
+      cs.namespace(|| "compute U_new"),
+      &u.X1,
+      &r.X0,
+      &Boolean::from(is_nonbase_secondary.clone()),
     )?;
 
     // Check that r.x[0] = Hash(params, i_start_R, i_end_R, z_R_end, R)
@@ -393,12 +422,15 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     let hash_r = le_bits_to_num(cs.namespace(|| "bits to hash second"), hash_bits)?;
     println!("NonBaseCase: check Hash_r= {:?}", hash_r.get_value());
     let check_pass_r = alloc_num_equals(
-      cs.namespace(|| "check consistency of r.X[0] with H(params, R, i, z_r_start, z_r_end)"),
-      &r.X0,
+      cs.namespace(|| {
+        "check consistency of right instance with H(params, R, i, z_r_start, z_r_end)"
+      }),
+      &right_io,
       &hash_r,
     )?;
 
     // Run NIFS Verifier
+    // Note in secondary circuit, we don't care about the result of this function.
     let R_fold = R.fold_with_r1cs(
       cs.namespace(|| "compute fold of R and r"),
       params.clone(),
@@ -408,17 +440,32 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       self.params.limb_width,
       self.params.n_limbs,
     )?;
-
-    // Run NIFS Verifier
+    // In first circuit, we fold U_i+1 and R_i+1
+    // In second circuit, we fold U_i+1 and R_i <-- this is because U_i+1 already
+    // attests to the validity of the merge function on the first circuit already.
+    // Note the prover make sure it gives the right T_R_U corresponding to the right
+    // chosen relaxed instance.
+    let right_relaxed = R.conditionally_select(
+      cs.namespace(|| "choosing right_relaxed"),
+      R_fold,
+      &Boolean::from(is_nonbase_secondary),
+    )?;
+        // Run NIFS Verifier
     let U_R_fold = U_fold.fold_with_relaxed_r1cs(
       cs.namespace(|| "compute fold of U and R"),
       params,
-      R_fold,
-      T_R_U,
+      right_relaxed.clone(),
+      T_R_U.clone(),
       self.ro_consts.clone(),
       self.params.limb_width,
       self.params.n_limbs,
     )?;
+    println!(
+      "[+] CIRCUIT: U_fold {:?} with right relaxed: {:?}, gives {:?}",
+      U_fold.W.x.get_value(),
+      right_relaxed.W.x.get_value(),
+      U_R_fold.W.x.get_value(),
+    );
 
     let hashChecks = AllocatedBit::and(
       cs.namespace(|| "check both hashes are correct"),
@@ -489,6 +536,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       &right_io_equal,
     )?;
     println!("[+] is BASE CASE ? {:?}", is_base_case.get_value());
+
     // Synthesize the circuit for the base case and get the new running instance
     let Unew_base = self.synthesize_base_case(cs.namespace(|| "base case"), u.clone())?;
 
@@ -513,6 +561,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       T_r,
       T_R_U,
       arity.clone(),
+      &is_base_case,
     )?;
 
     // Either check_non_base_pass=true or we are in the base case
@@ -644,10 +693,12 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
     println!(" ==> X1 H = {:?}\n", hash.get_value());
 
-    u.X1
+    u.X2
       .inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
+    // In non base case secondary circuit, this will be null
+    r.X2
+      .inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
     hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
-    r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
 
     Ok(())
   }
