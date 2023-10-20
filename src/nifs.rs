@@ -96,7 +96,7 @@ impl<G: Group> NIFS<G> {
     as_relaxed: bool
   ) -> Result<RelaxedR1CSInstance<G>, NovaError> {
     // initialize a new RO
-    let num_absorbs = if as_relaxed {NUM_FE_FOR_RO+10} else {NUM_FE_FOR_RO};
+    let num_absorbs = if as_relaxed {NUM_FE_FOR_RO+13} else {NUM_FE_FOR_RO};
     let mut ro = G::RO::new(ro_consts.clone(), num_absorbs);
 
     // append the digest of S to the transcript
