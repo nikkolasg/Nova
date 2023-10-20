@@ -385,6 +385,7 @@ where
 
     println!(" !! End of MAP step: u_primary.X0: {:?}", u_primary.X[0]);
     println!(" !! End of MAP step: u_primary.X1: {:?}", u_primary.X[1]);
+    println!(" !! End of MAP step: u_primary.X2: {:?}", u_primary.X[2]);
     println!(
       " !! End of MAP step: u_secondary.X0: {:?}",
       u_secondary.X[0]
@@ -461,12 +462,12 @@ where
       &right_W_secondary,
       true,
     )?;
-    println!(
-      "[+] PROVER: secondary U_fold {:?} with right relaxed: {:?}, gives {:?}",
-      left_U_secondary.comm_W.to_coordinates(),
-      right_U_secondary.comm_W.to_coordinates(),
-      U_secondary.comm_W.to_coordinates(),
-    );
+    //println!(
+    //  "[+] PROVER: secondary U_fold {:?} with right relaxed: {:?}, gives {:?}",
+    //  left_U_secondary.comm_W.to_coordinates(),
+    //  right_U_secondary.comm_W.to_coordinates(),
+    //  U_secondary.comm_W.to_coordinates(),
+    //);
 
     // Next we construct a proof of this folding and of the invocation of F
 
@@ -539,6 +540,37 @@ where
       &w_primary,
       false,
     )?;
+    println!(
+      "[+] PROVER : (2 step) MERGE  left_U_primary {:?} with previous computed u_primary {:?} gives {:?}",
+      left.U_primary.comm_W.to_coordinates(),
+      u_primary.comm_W.to_coordinates(),
+      left_U_primary.comm_W.to_coordinates()
+    );
+    println!(
+      "\t - left_U.commW {:?} & u.commW {:?} ",
+      left.U_primary.comm_W.to_coordinates(),
+      u_primary.comm_W.to_coordinates()
+    );
+    println!(
+      "\t - commT {:?}",
+      Commitment::<G1>::decompress(&nifs_left_primary.comm_T)?.to_coordinates()
+    );
+    println!(
+      "\t - left_U.u {:?} & u.u {:?} ",
+      left.U_primary.u, u_primary.u
+    );
+    println!(
+      "\t - left_U.X0 {:?} & u.X0 {:?} ",
+      left.U_primary.X[0], u_primary.X[0]
+    );
+    println!(
+      "\t - left_U.X1 {:?} & u.X1 {:?} ",
+      left.U_primary.X[1], u_primary.X[1]
+    );
+    println!(
+      "\t - left_U.X2 {:?} & u.X2 {:?} ",
+      left.U_primary.X[2], u_primary.X[2]
+    );
     let (nifs_primary, (U_primary, W_primary)) = NIFS::prove(
       &self.pp.ck_primary,
       &self.pp.ro_consts_primary,
@@ -549,13 +581,15 @@ where
       &right.W_primary,
       true,
     )?;
+    println!(
+      "[+] PROVER : MERGE SECONDARY U_fold {:?} with right relaxed {:?} gives {:?}",
+      left_U_primary.comm_W.to_coordinates(),
+      right.U_primary.comm_W.to_coordinates(),
+      U_primary.comm_W.to_coordinates()
+    );
 
     // Next we construct a proof of this folding in the secondary curve
     let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
-    println!(
-      " -- MERGE STEP: Left.u_primary.X0 == {:?}",
-      left.u_primary.X[0]
-    );
 
     let inputs_secondary: NovaAugmentedParallelCircuitInputs<G1> =
       NovaAugmentedParallelCircuitInputs::<G1>::new(
@@ -932,38 +966,38 @@ mod tests {
 
     leaf_1.verify()?;
 
-    println!(" --- THIRD LEAF PROVING ---");
-    let leaf_2 = TreeNode::map_step(
-      &pp,
-      AverageCircuit::default(),
-      TrivialTestCircuit::default(),
-      2,
-      vec![one],
-      vec![four2],
-    )?;
-    leaf_2.verify()?;
+    // println!(" --- THIRD LEAF PROVING ---");
+     let leaf_2 = TreeNode::map_step(
+       &pp,
+       AverageCircuit::default(),
+       TrivialTestCircuit::default(),
+       2,
+       vec![one],
+       vec![four2],
+     )?;
+     leaf_2.verify()?;
 
-    println!(" --- FOURTH LEAF PROVING ---");
-    let leaf_3 = TreeNode::map_step(
-      &pp,
-      AverageCircuit::default(),
-      TrivialTestCircuit::default(),
-      3,
-      vec![two],
-      vec![four2],
-    )?;
-    leaf_3.verify()?;
+    // println!(" --- FOURTH LEAF PROVING ---");
+     let leaf_3 = TreeNode::map_step(
+       &pp,
+       AverageCircuit::default(),
+       TrivialTestCircuit::default(),
+       3,
+       vec![two],
+       vec![four2],
+     )?;
+     leaf_3.verify()?;
 
     println!(" --- MERGE 01 PROVING ---");
     let merged01 = leaf_0.reduce(leaf_1)?;
     merged01.verify()?;
-    println!("\n--- MERGE 23 PROVING ---\n");
-    let merged23 = leaf_2.reduce(leaf_3)?;
-    merged23.verify()?;
+    // println!("\n--- MERGE 23 PROVING ---\n");
+     let merged23 = leaf_2.reduce(leaf_3)?;
+     merged23.verify()?;
 
-    println!("\n--- MERGE of MERGE PROVING ---\n");
-    let merged0123 = merged01.reduce(merged23)?;
-    merged0123.verify()?;
+    // println!("\n--- MERGE of MERGE PROVING ---\n");
+     let merged0123 = merged01.reduce(merged23)?;
+     merged0123.verify()?;
     Ok(())
   }
 

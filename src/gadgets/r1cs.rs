@@ -294,8 +294,18 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     // E_fold = self.E + r * T
     let rT = T.scalar_mul(cs.namespace(|| "r * T"), r_bits)?;
     let E_fold = self.E.add(cs.namespace(|| "self.E + r * T"), &rT)?;
-
-    // u_fold = u_r + r
+    // XXX no need since u is a strict r1cs instance.
+    // u_u_r = u_u * r
+    //let u_u_r = AllocatedNum::alloc(cs.namespace(|| "u_u_r"), || {
+    //  Ok(*u.u.get_value().get()? * r.get_value().get()?)
+    //})?;
+    //cs.enforce(
+    //  || "u_u_r enforce",
+    //  |lc| lc + u.u.get_variable(),
+    //  |lc| lc + r.get_variable(),
+    //  |lc| lc + u_u_r.get_variable(),
+    //);
+    // U_fold = U_u + r* u_u - since u_u is one we dont need to
     let u_fold = AllocatedNum::alloc(cs.namespace(|| "u_fold"), || {
       Ok(*self.u.get_value().get()? + r.get_value().get()?)
     })?;
@@ -397,8 +407,16 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
 
     // u_fold = u_r + r
     let u_u_r = AllocatedNum::alloc(cs.namespace(|| "u_u times r"), || {
-      Ok(*self.u.get_value().get()? * r.get_value().get()?)
+      Ok(*u.u.get_value().get()? * r.get_value().get()?)
     })?;
+    // TODO : reput after debugging
+    //cs.enforce(
+    //  || "u_u_r enforce",
+    //  |lc| lc + u.u.get_variable(),
+    //  |lc| lc + r.get_variable(),
+    //  |lc| lc + u_u_r.get_variable(),
+    //);
+
     let u_fold = AllocatedNum::alloc(cs.namespace(|| "u_fold"), || {
       Ok(*self.u.get_value().get()? + u_u_r.get_value().get()?)
     })?;

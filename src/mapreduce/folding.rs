@@ -245,9 +245,9 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       cs.namespace(|| "allocate T_u"),
       self.inputs.get().map_or(None, |inputs| {
         inputs
-          .T_r
+          .T_u
           .get()
-          .map_or(None, |T_r| Some(T_r.to_coordinates()))
+          .map_or(None, |T_u| Some(T_u.to_coordinates()))
       }),
     )?;
 
@@ -255,9 +255,9 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       cs.namespace(|| "allocate T_r"),
       self.inputs.get().map_or(None, |inputs| {
         inputs
-          .T_u
+          .T_r
           .get()
-          .map_or(None, |T_u| Some(T_u.to_coordinates()))
+          .map_or(None, |T_r| Some(T_r.to_coordinates()))
       }),
     )?;
 
@@ -345,11 +345,20 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     }
     U.absorb_in_ro(cs.namespace(|| "absorb U"), &mut ro)?;
     println!("[+] Hash Consistency Check for U:");
-    println!("\t - U.W.X: {:?}", U.W.x.get_value());
     println!("\t - params: {:?}", params.get_value());
     println!("\t - i_start_U: {:?}", i_start_U.get_value());
     println!("\t - i_end_U: {:?}", i_end_U.get_value());
-    println!("\t - z_U_end: {:?}", z_U_end[0].get_value());
+    println!(
+      "\t - z_U_end (len {:?}): {:?}",
+      z_U_end.len(),
+      z_U_end[0].get_value()
+    );
+    println!("\t - U.W.X: {:?}", U.W.x.get_value());
+    println!("\t - U.E.X: {:?}", U.E.x.get_value());
+    println!("\t - U.u: {:?}", U.u.get_value());
+    println!("\t - U.X0: {:?}", U.X0.value);
+    println!("\t - U.X1: {:?}", U.X1.value);
+    println!("\t - U.X2 {:?}", U.X2.value);
 
     let hash_bits = ro.squeeze(cs.namespace(|| "Input hash first"), NUM_HASH_BITS)?;
     let hash_u = le_bits_to_num(cs.namespace(|| "bits to hash first"), hash_bits)?;
@@ -366,11 +375,39 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       cs.namespace(|| "compute fold of U and u"),
       params.clone(),
       u.clone(), // ARGH. All these function should take a reference.
-      T_u,
+      T_u.clone(),
       self.ro_consts.clone(),
       self.params.limb_width,
       self.params.n_limbs,
     )?;
+    println!(
+      "[+] CIRCUIT: MERGE SECONDARY left_U {:?} with previous computed u {:?} gives {:?}",
+      U.W.x.get_value(),
+      u.W.x.get_value(),
+      U_fold.W.x.get_value()
+    );
+    println!(
+      "\t - left_U.commW {:?} & u.commW {:?}",
+      U.W.x.get_value(),
+      u.W.x.get_value()
+    );
+    println!("\t - commT {:?} ", T_u.x.get_value());
+    println!("\t - left_U.u {:?}", U.u.get_value());
+    println!(
+      "\t - left_U.X0 {:?} & u.X0 {:?}",
+      U.X0.value,
+      u.X0.get_value()
+    );
+    println!(
+      "\t - left_U.X1 {:?} & u.X1 {:?}",
+      U.X1.value,
+      u.X1.get_value()
+    );
+    println!(
+      "\t - left_U.X2 {:?} & u.X2 {:?}",
+      U.X2.value,
+      u.X2.get_value()
+    );
 
     // CHECK if we are in secondary circuit: if we are, then the folding operates a little bit differently.
     // In first circuit, we operate  as per the book.
@@ -682,16 +719,27 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     }
     Unew.absorb_in_ro(cs.namespace(|| "absorb U_new"), &mut ro)?;
 
-    println!("[+] Hash Output X1:");
+    println!("[+] Hash Output X2:");
     println!("\t - params: {:?}", params.get_value());
     println!("\t - i_start_U: {:?}", i_start_U.get_value());
     println!("\t - i_end_R: {:?}", i_end_R.get_value());
-    println!("\t - z_output: {:?}", z_output[0].get_value());
+    println!(
+      "\t - z_output (len {:?}): {:?}",
+      z_output.len(),
+      z_output[0].get_value()
+    );
     println!("\t - Unew.W.x: {:?}", Unew.W.x.get_value());
+    println!("\t - Unew.E.x: {:?}", Unew.E.x.get_value());
+    println!("\t - Unew.u: {:?}", Unew.u.get_value());
+    println!("\t - Unew.X0: {:?}", Unew.X0.value);
+    println!("\t - Unew.X1: {:?}", Unew.X1.value);
+    println!("\t - Unew.X2: {:?}", Unew.X2.value);
 
     let hash_bits = ro.squeeze(cs.namespace(|| "output hash bits"), NUM_HASH_BITS)?;
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
-    println!(" ==> X1 H = {:?}\n", hash.get_value());
+    println!(" ==> X2 H = {:?}", hash.get_value());
+    println!(" ==> X0 H = {:?}", u.X2.get_value());
+    println!(" ==> X1 H = {:?}", r.X2.get_value());
 
     u.X2
       .inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
