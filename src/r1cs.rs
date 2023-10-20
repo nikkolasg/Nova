@@ -270,7 +270,7 @@ impl<G: Group> R1CSShape<G> {
     };
 
     let (AZ_2, BZ_2, CZ_2) = {
-      let Z2 = concat(vec![W2.W.clone(), vec![G::Scalar::one()], U2.X.clone()]);
+      let Z2 = concat(vec![W2.W.clone(), vec![U2.u], U2.X.clone()]);
       self.multiply_vec(&Z2)?
     };
 
@@ -288,7 +288,7 @@ impl<G: Group> R1CSShape<G> {
       .collect::<Vec<G::Scalar>>();
     let u_2_cdot_CZ_1 = (0..CZ_1.len())
       .into_par_iter()
-      .map(|i| CZ_1[i])
+      .map(|i| U2.u * CZ_1[i])
       .collect::<Vec<G::Scalar>>();
 
     let T = AZ_1_circ_BZ_2
@@ -567,12 +567,12 @@ impl<G: Group> RelaxedR1CSInstance<G> {
     }
   }
 
-   pub fn absorb_in_ro_as_R1CS(&self, ro: &mut G::RO) {
-      self.comm_W.absorb_in_ro(ro);
-      for x in &self.X {
-        ro.absorb(scalar_as_base::<G>(*x));
-      }
+  pub fn absorb_in_ro_as_R1CS(&self, ro: &mut G::RO) {
+    self.comm_W.absorb_in_ro(ro);
+    for x in &self.X {
+      ro.absorb(scalar_as_base::<G>(*x));
     }
+  }
 
   /// Initializes a new RelaxedR1CSInstance from an R1CSInstance
   pub fn from_r1cs_instance(

@@ -450,7 +450,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       R_fold,
       &Boolean::from(is_nonbase_secondary),
     )?;
-        // Run NIFS Verifier
+    // Run NIFS Verifier
     let U_R_fold = U_fold.fold_with_relaxed_r1cs(
       cs.namespace(|| "compute fold of U and R"),
       params,
@@ -685,7 +685,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     println!("[+] Hash Output X1:");
     println!("\t - params: {:?}", params.get_value());
     println!("\t - i_start_U: {:?}", i_start_U.get_value());
-    println!("\t - i_end_U: {:?}", i_end_U.get_value());
+    println!("\t - i_end_R: {:?}", i_end_R.get_value());
     println!("\t - z_output: {:?}", z_output[0].get_value());
     println!("\t - Unew.W.x: {:?}", Unew.W.x.get_value());
 

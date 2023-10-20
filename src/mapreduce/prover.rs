@@ -614,6 +614,13 @@ where
     // we know we have proven for this range.
     let i_start = left.i_start.clone();
     let i_end = right.i_end.clone();
+    println!("[+] PROVER MERGE output:");
+    println!("\t - (i_start,i_end) = ({},{})", i_start, i_end);
+    println!("\t - U_primary = {:?}", U_primary.comm_W.to_coordinates());
+    println!(
+      "\t - U_secondary = {:?}",
+      U_secondary.comm_W.to_coordinates()
+    );
     // z_start is technically useless after the map step, because reduce always take
     // the output and do not hash the first values. Nevertheless since we are in a single circuit
     // we have to give it as input always, as the "map" function is always computed.
@@ -826,7 +833,9 @@ where
 mod tests {
   use super::*;
   type G1 = pasta_curves::pallas::Point;
+  type F1 = pasta_curves::pallas::Scalar;
   type G2 = pasta_curves::vesta::Point;
+  type F2 = pasta_curves::vesta::Scalar;
   use crate::mapreduce::circuit::{MapReduceArity, MapReduceCircuit};
   use crate::traits::circuit::{StepCircuit, TrivialTestCircuit};
   use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
@@ -884,6 +893,80 @@ mod tests {
   }
 
   use eyre::Result;
+
+  #[test]
+  fn test_mapreduce_two_reduce() -> Result<()> {
+    // produce public parameters
+    let pp = PublicParams::<
+      G1,
+      G2,
+      AverageCircuit<<G1 as Group>::Scalar>,
+      TrivialTestCircuit<<G2 as Group>::Scalar>,
+    >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
+    let one = <G1 as Group>::Scalar::one();
+    let two = one + one;
+    let one2 = <G2 as Group>::Scalar::one();
+    let two2 = one2 + one2;
+    let four2 = two2 + two2;
+
+    println!(" --- FIRST LEAF PROVING ---");
+    let leaf_0 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      0,
+      vec![one],
+      vec![four2],
+    )?;
+    leaf_0.verify()?;
+
+    println!(" --- SECOND LEAF PROVING ---");
+    let leaf_1 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      1,
+      vec![two],
+      vec![four2],
+    )?;
+
+    leaf_1.verify()?;
+
+    println!(" --- THIRD LEAF PROVING ---");
+    let leaf_2 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      2,
+      vec![one],
+      vec![four2],
+    )?;
+    leaf_2.verify()?;
+
+    println!(" --- FOURTH LEAF PROVING ---");
+    let leaf_3 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      3,
+      vec![two],
+      vec![four2],
+    )?;
+    leaf_3.verify()?;
+
+    println!(" --- MERGE 01 PROVING ---");
+    let merged01 = leaf_0.reduce(leaf_1)?;
+    merged01.verify()?;
+    println!("\n--- MERGE 23 PROVING ---\n");
+    let merged23 = leaf_2.reduce(leaf_3)?;
+    merged23.verify()?;
+
+    println!("\n--- MERGE of MERGE PROVING ---\n");
+    let merged0123 = merged01.reduce(merged23)?;
+    merged0123.verify()?;
+    Ok(())
+  }
+
   #[test]
   fn test_mapreduce_single() -> Result<()> {
     // produce public parameters
@@ -924,12 +1007,12 @@ mod tests {
 
     println!(" --- MERGE PROVING ---");
     let merged = leaf_0.reduce(leaf_1)?;
-    merged.partial_verify()?;
+    merged.verify()?;
     Ok(())
   }
 
   #[test]
-  fn test_secondary_fold() -> Result<(), NovaError> {
+  fn test_secondary_fold_mixed() -> Result<(), NovaError> {
     let pp = PublicParams::<
       G1,
       G2,
@@ -951,20 +1034,7 @@ mod tests {
       vec![one],
       vec![four2],
     )?;
-    leaf_0.verify()?;
-
-    //println!(" --- SECOND LEAF PROVING ---");
-    let leaf_1 = TreeNode::map_step(
-      &pp,
-      AverageCircuit::default(),
-      TrivialTestCircuit::default(),
-      1,
-      vec![two],
-      vec![four2],
-    )?;
-    leaf_1.verify()?;
-
-    // do first folding and verify correctness
+    leaf_0.verify().expect("leaf 0 verification failed");
     let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
       &pp.ck_secondary,
       &pp.ro_consts_secondary,
@@ -975,38 +1045,64 @@ mod tests {
       &leaf_0.data.w_secondary,
       false,
     )?;
-    pp.r1cs_shape_secondary.is_sat_relaxed(
-      &pp.ck_secondary,
-      &left_U_secondary,
-      &left_W_secondary,
-    )?;
-    let (nifs_right_secondary, (right_U_secondary, right_W_secondary)) = NIFS::prove(
-      &pp.ck_secondary,
-      &pp.ro_consts_secondary,
-      &pp.r1cs_shape_secondary,
-      &leaf_1.data.U_secondary,
-      &leaf_1.data.W_secondary,
-      &leaf_1.data.u_secondary,
-      &leaf_1.data.w_secondary,
-      false,
-    )?;
-    pp.r1cs_shape_secondary.is_sat_relaxed(
-      &pp.ck_secondary,
-      &right_U_secondary,
-      &right_W_secondary,
-    )?;
-    let (nifs_secondary, (U_secondary, W_secondary)) = NIFS::prove(
+    pp.r1cs_shape_secondary
+      .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
+      .expect("first NIFS is not sat");
+
+    // do it again
+    let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
       &pp.ck_secondary,
       &pp.ro_consts_secondary,
       &pp.r1cs_shape_secondary,
       &left_U_secondary,
       &left_W_secondary,
-      &right_U_secondary,
-      &right_W_secondary,
+      &left_U_secondary,
+      &left_W_secondary,
       true,
     )?;
     pp.r1cs_shape_secondary
-      .is_sat_relaxed(&pp.ck_secondary, &U_secondary, &W_secondary)?;
+      .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
+      .expect("second NIFS is not sat");
+
+    //println!(" --- SECOND LEAF PROVING ---");
+    //let leaf_1 = TreeNode::map_step(
+    //  &pp,
+    //  AverageCircuit::default(),
+    //  TrivialTestCircuit::default(),
+    //  1,
+    //  vec![two],
+    //  vec![four2],
+    //)?;
+    //leaf_1.verify().expect("leaf 1 verification failed");
+
+    // do first folding and verify correctness
+    //let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
+    //  &pp.ck_secondary,
+    //  &pp.ro_consts_secondary,
+    //  &pp.r1cs_shape_secondary,
+    //  &leaf_0.data.U_secondary,
+    //  &leaf_0.data.W_secondary,
+    //  &leaf_0.data.u_secondary,
+    //  &leaf_0.data.w_secondary,
+    //  false,
+    //)?;
+    //pp.r1cs_shape_secondary
+    //  .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
+    //  .expect("left secondary instance is not sat");
+
+    //let (nifs_secondary, (U_secondary, W_secondary)) = NIFS::prove(
+    //  &pp.ck_secondary,
+    //  &pp.ro_consts_secondary,
+    //  &pp.r1cs_shape_secondary,
+    //  &left_U_secondary,
+    //  &left_W_secondary,
+    //  &leaf_1.data.U_secondary,
+    //  &leaf_1.data.W_secondary,
+    //  true,
+    //)?;
+    //pp.r1cs_shape_secondary
+    //  .is_sat_relaxed(&pp.ck_secondary, &U_secondary, &W_secondary)
+    //  .expect("secondary instance is not sat");
 
     Ok(())
   }
