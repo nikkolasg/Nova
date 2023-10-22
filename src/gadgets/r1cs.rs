@@ -106,8 +106,9 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     // So we parse all of its bytes as a G::Base element
     let u = alloc_scalar_as_base::<G, _>(
       cs.namespace(|| "allocate u"),
-      inst.get().map_or(None, |inst| Some(inst.u)),
+      inst.get().map_or(None, |inst| Some(inst.u.clone())),
     )?;
+    println!("\n++++++++\n\t - instance.u {:?}\n\t - Allocated {:?}\n+++++++++\n", inst.get().map_or(None, |inst| Some(inst.u)),u.get_value());
 
     // Allocate X0 and X1. If the input instance is None, then allocate default values 0.
     let X0 = BigNat::alloc_from_nat(

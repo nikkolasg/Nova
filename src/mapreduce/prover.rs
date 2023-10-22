@@ -652,9 +652,10 @@ where
     println!("\t - (i_start,i_end) = ({},{})", i_start, i_end);
     println!("\t - U_primary = {:?}", U_primary.comm_W.to_coordinates());
     println!(
-      "\t - U_secondary = {:?}",
+      "\t - U_secondary.W  = {:?}",
       U_secondary.comm_W.to_coordinates()
     );
+    println!("\t\t - U_secondary.u: {:?}", U_secondary.u);
     // z_start is technically useless after the map step, because reduce always take
     // the output and do not hash the first values. Nevertheless since we are in a single circuit
     // we have to give it as input always, as the "map" function is always computed.
@@ -711,38 +712,6 @@ where
     })
   }
 
-  fn partial_verify(&self) -> Result<(), NovaError> {
-    self
-      .pp
-      .r1cs_shape_primary
-      .is_sat_relaxed(
-        &self.pp.ck_primary,
-        &self.data.U_primary,
-        &self.data.W_primary,
-      )
-      .and_then(|_| {
-        self.pp.r1cs_shape_primary.is_sat_relaxed(
-          &self.pp.ck_primary,
-          &self.data.u_primary,
-          &self.data.w_primary,
-        )
-      })
-      .and_then(|_| {
-        self.pp.r1cs_shape_secondary.is_sat_relaxed(
-          &self.pp.ck_secondary,
-          &self.data.u_secondary,
-          &self.data.w_secondary,
-        )
-      })
-    // unsat
-    //.and_then(|_| {
-    //  self.pp.r1cs_shape_secondary.is_sat_relaxed(
-    //    &self.pp.ck_secondary,
-    //    &self.data.U_secondary,
-    //    &self.data.W_secondary,
-    //  )
-    //})
-  }
   // TODO: currently just check the shape, need to verify hash consistency
   fn verify(&self) -> Result<(), NovaError> {
     self
@@ -833,9 +802,10 @@ where
       if nodes.len() == 1 {
         break;
       }
+      println!("\t --- !!! MERGE ALL: nodes.len() = {:?}", nodes.len());
       // New nodes list will reduce a half each round
       nodes = nodes
-        .par_chunks(2)
+        .chunks(2)
         .map(|item| match item {
           // There are 2 nodes in the chunk
           [vl, vr] => vl.clone()
@@ -875,6 +845,7 @@ mod tests {
   use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
   use core::marker::PhantomData;
   use ff::PrimeField;
+  use num_integer::Average;
 
   #[derive(Clone, Debug, Default)]
   struct AverageCircuit<F: PrimeField> {
@@ -929,6 +900,32 @@ mod tests {
   use eyre::Result;
 
   #[test]
+  fn test_parallel_snark() -> Result<()> {
+    let pp = PublicParams::<
+      G1,
+      G2,
+      AverageCircuit<<G1 as Group>::Scalar>,
+      TrivialTestCircuit<<G2 as Group>::Scalar>,
+    >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
+    let n = 5;
+    let (z1s, z2s) = (0..n)
+      .map(|i| (vec![F1::from(i)], vec![F2::from(i)]))
+      .unzip();
+    let total = <G1 as Group>::Scalar::from((0..n).sum::<u64>());
+    let snark = ParallelSNARK::prove(
+      &pp,
+      z1s,
+      z2s,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+    )?;
+    assert!(snark.get_tree_size() == 1);
+    snark.get_nodes()[0].verify()?;
+    assert!(snark.get_nodes()[0].data.z_end_primary[0] == total);
+    Ok(())
+  }
+
+  #[test]
   fn test_mapreduce_two_reduce() -> Result<()> {
     // produce public parameters
     let pp = PublicParams::<
@@ -967,37 +964,37 @@ mod tests {
     leaf_1.verify()?;
 
     // println!(" --- THIRD LEAF PROVING ---");
-     let leaf_2 = TreeNode::map_step(
-       &pp,
-       AverageCircuit::default(),
-       TrivialTestCircuit::default(),
-       2,
-       vec![one],
-       vec![four2],
-     )?;
-     leaf_2.verify()?;
+    let leaf_2 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      2,
+      vec![one],
+      vec![four2],
+    )?;
+    leaf_2.verify()?;
 
     // println!(" --- FOURTH LEAF PROVING ---");
-     let leaf_3 = TreeNode::map_step(
-       &pp,
-       AverageCircuit::default(),
-       TrivialTestCircuit::default(),
-       3,
-       vec![two],
-       vec![four2],
-     )?;
-     leaf_3.verify()?;
+    let leaf_3 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      3,
+      vec![two],
+      vec![four2],
+    )?;
+    leaf_3.verify()?;
 
     println!(" --- MERGE 01 PROVING ---");
     let merged01 = leaf_0.reduce(leaf_1)?;
     merged01.verify()?;
     // println!("\n--- MERGE 23 PROVING ---\n");
-     let merged23 = leaf_2.reduce(leaf_3)?;
-     merged23.verify()?;
+    let merged23 = leaf_2.reduce(leaf_3)?;
+    merged23.verify()?;
 
     // println!("\n--- MERGE of MERGE PROVING ---\n");
-     let merged0123 = merged01.reduce(merged23)?;
-     merged0123.verify()?;
+    let merged0123 = merged01.reduce(merged23)?;
+    merged0123.verify()?;
     Ok(())
   }
 

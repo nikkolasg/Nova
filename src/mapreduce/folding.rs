@@ -353,8 +353,18 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       z_U_end.len(),
       z_U_end[0].get_value()
     );
-    println!("\t - U.W.X: {:?}", U.W.x.get_value());
-    println!("\t - U.E.X: {:?}", U.E.x.get_value());
+    println!(
+      "\t - U.W.X: {:?}, {:?}, {:?}",
+      U.W.x.get_value(),
+      U.W.y.get_value(),
+      U.W.is_infinity.get_value()
+    );
+    println!(
+      "\t - U.E.X: {:?}, {:?} {:?}",
+      U.E.x.get_value(),
+      U.E.y.get_value(),
+      U.E.is_infinity.get_value()
+    );
     println!("\t - U.u: {:?}", U.u.get_value());
     println!("\t - U.X0: {:?}", U.X0.value);
     println!("\t - U.X1: {:?}", U.X1.value);
@@ -381,32 +391,15 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       self.params.n_limbs,
     )?;
     println!(
-      "[+] CIRCUIT: MERGE SECONDARY left_U {:?} with previous computed u {:?} gives {:?}",
+      "[+] CIRCUIT: MERGE (a) left_U {:?} with previous computed u {:?} gives {:?}",
       U.W.x.get_value(),
       u.W.x.get_value(),
       U_fold.W.x.get_value()
     );
     println!(
-      "\t - left_U.commW {:?} & u.commW {:?}",
-      U.W.x.get_value(),
-      u.W.x.get_value()
-    );
-    println!("\t - commT {:?} ", T_u.x.get_value());
-    println!("\t - left_U.u {:?}", U.u.get_value());
-    println!(
-      "\t - left_U.X0 {:?} & u.X0 {:?}",
-      U.X0.value,
-      u.X0.get_value()
-    );
-    println!(
-      "\t - left_U.X1 {:?} & u.X1 {:?}",
-      U.X1.value,
-      u.X1.get_value()
-    );
-    println!(
-      "\t - left_U.X2 {:?} & u.X2 {:?}",
-      U.X2.value,
-      u.X2.get_value()
+      "\t - left_U.u {:?} & Unew.u {:?}",
+      U.u.get_value(),
+      U_fold.u.get_value()
     );
 
     // CHECK if we are in secondary circuit: if we are, then the folding operates a little bit differently.
@@ -471,12 +464,25 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     let R_fold = R.fold_with_r1cs(
       cs.namespace(|| "compute fold of R and r"),
       params.clone(),
-      r,
+      r.clone(),
       T_r,
       self.ro_consts.clone(),
       self.params.limb_width,
       self.params.n_limbs,
     )?;
+    println!(
+      "[+] CIRCUIT: MERGE (b) R {:?} with previous computed r {:?} gives {:?}",
+      R.W.x.get_value(),
+      r.W.x.get_value(),
+      R_fold.W.x.get_value()
+    );
+
+    println!(
+      "\t - R.u {:?} & Unew.u {:?}",
+      U.u.get_value(),
+      U_fold.u.get_value()
+    );
+
     // In first circuit, we fold U_i+1 and R_i+1
     // In second circuit, we fold U_i+1 and R_i <-- this is because U_i+1 already
     // attests to the validity of the merge function on the first circuit already.
@@ -498,10 +504,16 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       self.params.n_limbs,
     )?;
     println!(
-      "[+] CIRCUIT: U_fold {:?} with right relaxed: {:?}, gives {:?}",
+      "[+] CIRCUIT: MERGE (c) U_fold {:?} with right relaxed: {:?}, gives {:?}",
       U_fold.W.x.get_value(),
       right_relaxed.W.x.get_value(),
       U_R_fold.W.x.get_value(),
+    );
+    println!(
+      "\t - U_fold.u {:?}\n\t - R_fold {:?}\n\t - Unew.u {:?}",
+      U_fold.u.get_value(),
+      right_relaxed.u.get_value(),
+      U_R_fold.u.get_value()
     );
 
     let hashChecks = AllocatedBit::and(
@@ -728,8 +740,18 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       z_output.len(),
       z_output[0].get_value()
     );
-    println!("\t - Unew.W.x: {:?}", Unew.W.x.get_value());
-    println!("\t - Unew.E.x: {:?}", Unew.E.x.get_value());
+    println!(
+      "\t - U.W.X: {:?}, {:?}, {:?}",
+      Unew.W.x.get_value(),
+      Unew.W.y.get_value(),
+      Unew.W.is_infinity.get_value()
+    );
+    println!(
+      "\t - U.E.X: {:?}, {:?} {:?}",
+      Unew.E.x.get_value(),
+      Unew.E.y.get_value(),
+      Unew.E.is_infinity.get_value()
+    );
     println!("\t - Unew.u: {:?}", Unew.u.get_value());
     println!("\t - Unew.X0: {:?}", Unew.X0.value);
     println!("\t - Unew.X1: {:?}", Unew.X1.value);
@@ -751,3 +773,28 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     Ok(())
   }
 }
+
+//pub struct ROCircuitLog<F: Field, R: ROCircuitTrait<F>> {
+//  rocircuit: R,
+//}
+
+//impl<F,R> ROCircuitTrait<F> for ROCircuitLog<F,R> where
+//  Scalar: PrimeField + PrimeFieldBits + Serialize + for<'de> Deserialize<'de>,
+//  R: ROCircuitTrait<F>,
+//  {
+//    type Constants = R::Constants;
+//    fn new(constants: Self::Constants, num_absorbs: usize) -> Self {
+//      Self {
+//        R::new(constants, num_absorbs)
+//      }
+//    }
+//    fn absorb(&mut self, e: AllocatedNum<F>) {
+//        print!("\t - Absorb: {:?}",e);
+//        self.rocircuit.absorb(e);
+//    }
+//    fn squeeze<CS>(&mut self, cs: CS, num_bits: usize) -> Result<Vec<AllocatedBit>, SynthesisError>
+//      where
+//        CS: ConstraintSystem<F> {
+//        self.rocircuit.squeeze(cs, num_bits)
+//    }
+//}
