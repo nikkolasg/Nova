@@ -746,92 +746,63 @@ where
   }
 }
 
-/// Structure for parallelization
-#[derive(Clone)]
-pub struct ParallelSNARK<'a, G1, G2, C1, C2>
-where
-  G1: Group<Base = <G2 as Group>::Scalar>,
-  G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: MapReduceCircuit<G1::Scalar>,
-  C2: MapReduceCircuit<G2::Scalar>,
-{
-  pp: &'a PublicParams<G1, G2, C1, C2>,
-  nodes: Vec<TreeNode<'a, G1, G2, C1, C2>>,
-}
-
 /// Implementation for parallelization SNARK
-impl<'a, G1, G2, C1, C2> ParallelSNARK<'a, G1, G2, C1, C2>
+pub fn vec_map_reduce<'a, G1, G2, C1, C2>(
+  pp: &'a PublicParams<G1, G2, C1, C2>,
+  // Each z0 for each leaf, independent
+  z0s_primary: Vec<Vec<G1::Scalar>>,
+  z0_secondary: Vec<Vec<G2::Scalar>>,
+  c_primary: C1,
+  c_secondary: C2,
+) -> Result<TreeNode<'a, G1, G2, C1, C2>, NovaError>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
   C1: MapReduceCircuit<G1::Scalar>,
   C2: MapReduceCircuit<G2::Scalar>,
 {
-  /// Create a new instance of parallel SNARK
-  pub fn prove(
-    pp: &'a PublicParams<G1, G2, C1, C2>,
-    // Each z0 for each leaf, independent
-    z0s_primary: Vec<Vec<G1::Scalar>>,
-    z0_secondary: Vec<Vec<G2::Scalar>>,
-    c_primary: C1,
-    c_secondary: C2,
-  ) -> Result<Self, NovaError> {
-    let leaves = z0s_primary
-      .into_par_iter()
-      .zip(z0_secondary)
-      .enumerate()
-      .map(|(i, (z0p, z0s))| {
-        TreeNode::map_step(
-          &pp,
-          c_primary.clone(),
-          c_secondary.clone(),
-          i as u64,
-          z0p,
-          z0s,
-        )
-      })
-      .collect::<Result<Vec<_>, _>>()?;
-    // Calculate the max height of the tree
-    // ⌈log2(n)⌉ + 1
-    let max_height = ((leaves.len() as f64).log2().ceil() + 1f64) as usize;
+  let leaves = z0s_primary
+    .into_par_iter()
+    .zip(z0_secondary)
+    .enumerate()
+    .map(|(i, (z0p, z0s))| {
+      TreeNode::map_step(
+        &pp,
+        c_primary.clone(),
+        c_secondary.clone(),
+        i as u64,
+        z0p,
+        z0s,
+      )
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+  // Calculate the max height of the tree
+  // ⌈log2(n)⌉ + 1
+  let max_height = ((leaves.len() as f64).log2().ceil() + 1f64) as usize;
 
-    let mut nodes = leaves;
-    // Build up the tree with max given height
-    for level in 0..max_height {
-      // Exist if we on the root of the tree
-      if nodes.len() == 1 {
-        break;
-      }
-      println!("\t --- !!! MERGE ALL: nodes.len() = {:?}", nodes.len());
-      // New nodes list will reduce a half each round
-      nodes = nodes
-        .chunks(2)
-        .map(|item| match item {
-          // There are 2 nodes in the chunk
-          [vl, vr] => vl.clone()
+  let mut nodes = leaves;
+  // Build up the tree with max given height
+  for level in 0..max_height {
+    // Exist if we on the root of the tree
+    if nodes.len() == 1 {
+      break;
+    }
+    println!("\t --- !!! MERGE ALL: nodes.len() = {:?}", nodes.len());
+    // New nodes list will reduce a half each round
+    nodes = nodes
+      .par_chunks(2)
+      .map(|item| match item {
+        // There are 2 nodes in the chunk
+        [vl, vr] => vl.clone()
           // TODO remove these clones maybe with iter tools...
             .reduce(vr.clone()),
-          // Just 1 node left, we carry it to the next level
-          [vl] => Ok(vl.clone()),
-          _ => panic!("Invalid chunk size - tree of size not power of two not supported yet"),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    }
-    Ok(Self { pp, nodes })
+        // Just 1 node left, we carry it to the next level
+        [vl] => Ok(vl.clone()),
+        _ => panic!("Invalid chunk size - tree of size not power of two not supported yet"),
+      })
+      .collect::<Result<Vec<_>, _>>()?;
   }
-
-  // --------------------------------------------------------------------------------------
-  // --------------------------------------------------------------------------------------
-
-  /// Get all nodes from given instance
-  pub fn get_nodes(&self) -> Vec<TreeNode<G1, G2, C1, C2>> {
-    self.nodes.clone()
-  }
-
-  /// Get current length of current level
-  pub fn get_tree_size(&self) -> usize {
-    self.nodes.len()
-  }
+  Ok(nodes[0].clone())
 }
 
 mod tests {
@@ -912,16 +883,15 @@ mod tests {
       .map(|i| (vec![F1::from(i)], vec![F2::from(i)]))
       .unzip();
     let total = <G1 as Group>::Scalar::from((0..n).sum::<u64>());
-    let snark = ParallelSNARK::prove(
+    let result_instance = vec_map_reduce(
       &pp,
       z1s,
       z2s,
       AverageCircuit::default(),
       TrivialTestCircuit::default(),
     )?;
-    assert!(snark.get_tree_size() == 1);
-    snark.get_nodes()[0].verify()?;
-    assert!(snark.get_nodes()[0].data.z_end_primary[0] == total);
+    result_instance.verify()?;
+    assert!(result_instance.data.z_end_primary[0] == total);
     Ok(())
   }
 
