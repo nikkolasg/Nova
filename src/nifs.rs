@@ -40,10 +40,14 @@ impl<G: Group> NIFS<G> {
     W1: &RelaxedR1CSWitness<G>,
     U2: &RelaxedR1CSInstance<G>,
     W2: &RelaxedR1CSWitness<G>,
-    as_relaxed: bool
+    as_relaxed: bool,
   ) -> Result<(NIFS<G>, (RelaxedR1CSInstance<G>, RelaxedR1CSWitness<G>)), NovaError> {
     // initialize a new RO
-    let num_absorbs = if as_relaxed {NUM_FE_FOR_RO+13} else {NUM_FE_FOR_RO};
+    let num_absorbs = if as_relaxed {
+      NUM_FE_FOR_RO + 16
+    } else {
+      NUM_FE_FOR_RO
+    };
     let mut ro = G::RO::new(ro_consts.clone(), num_absorbs);
 
     // append S to the transcript
@@ -93,10 +97,14 @@ impl<G: Group> NIFS<G> {
     S_digest: &G::Scalar,
     U1: &RelaxedR1CSInstance<G>,
     U2: &RelaxedR1CSInstance<G>,
-    as_relaxed: bool
+    as_relaxed: bool,
   ) -> Result<RelaxedR1CSInstance<G>, NovaError> {
     // initialize a new RO
-    let num_absorbs = if as_relaxed {NUM_FE_FOR_RO+13} else {NUM_FE_FOR_RO};
+    let num_absorbs = if as_relaxed {
+      NUM_FE_FOR_RO + 16
+    } else {
+      NUM_FE_FOR_RO
+    };
     let mut ro = G::RO::new(ro_consts.clone(), num_absorbs);
 
     // append the digest of S to the transcript

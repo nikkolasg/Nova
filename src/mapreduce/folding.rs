@@ -365,7 +365,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       U.E.y.get_value(),
       U.E.is_infinity.get_value()
     );
-    println!("\t - U.u: {:?}", U.u.get_value());
+    println!("\t - U.u: {:?}", U.u.value);
     println!("\t - U.X0: {:?}", U.X0.value);
     println!("\t - U.X1: {:?}", U.X1.value);
     println!("\t - U.X2 {:?}", U.X2.value);
@@ -398,8 +398,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     );
     println!(
       "\t - left_U.u {:?} & Unew.u {:?}",
-      U.u.get_value(),
-      U_fold.u.get_value()
+      U.u.value, U_fold.u.value
     );
 
     // CHECK if we are in secondary circuit: if we are, then the folding operates a little bit differently.
@@ -477,11 +476,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       R_fold.W.x.get_value()
     );
 
-    println!(
-      "\t - R.u {:?} & Unew.u {:?}",
-      U.u.get_value(),
-      U_fold.u.get_value()
-    );
+    println!("\t - R.u {:?} & Unew.u {:?}", U.u.value, U_fold.u.value);
 
     // In first circuit, we fold U_i+1 and R_i+1
     // In second circuit, we fold U_i+1 and R_i <-- this is because U_i+1 already
@@ -511,9 +506,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     );
     println!(
       "\t - U_fold.u {:?}\n\t - R_fold {:?}\n\t - Unew.u {:?}",
-      U_fold.u.get_value(),
-      right_relaxed.u.get_value(),
-      U_R_fold.u.get_value()
+      U_fold.u.value, right_relaxed.u.value, U_R_fold.u.value
     );
 
     let hashChecks = AllocatedBit::and(
@@ -752,7 +745,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       Unew.E.y.get_value(),
       Unew.E.is_infinity.get_value()
     );
-    println!("\t - Unew.u: {:?}", Unew.u.get_value());
+    println!("\t - Unew.u: {:?}", Unew.u.value);
     println!("\t - Unew.X0: {:?}", Unew.X0.value);
     println!("\t - Unew.X1: {:?}", Unew.X1.value);
     println!("\t - Unew.X2: {:?}", Unew.X2.value);

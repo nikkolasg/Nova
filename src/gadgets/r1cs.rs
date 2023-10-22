@@ -8,8 +8,8 @@ use crate::{
   gadgets::{
     ecc::AllocatedPoint,
     utils::{
-      alloc_bignat_constant, alloc_one, alloc_scalar_as_base, conditionally_select,
-      conditionally_select_bignat, le_bits_to_num,
+      alloc_bignat_constant, alloc_one, alloc_scalar_as_base, conditionally_select_bignat,
+      le_bits_to_num,
     },
   },
   r1cs::RelaxedR1CSInstance,
@@ -74,7 +74,7 @@ impl<G: Group> AllocatedR1CSInstance<G> {
 pub struct AllocatedRelaxedR1CSInstance<G: Group> {
   pub(crate) W: AllocatedPoint<G>,
   pub(crate) E: AllocatedPoint<G>,
-  pub(crate) u: AllocatedNum<G::Base>,
+  pub(crate) u: BigNat<G::Base>,
   pub(crate) X0: BigNat<G::Base>,
   pub(crate) X1: BigNat<G::Base>,
   pub(crate) X2: BigNat<G::Base>,
@@ -102,13 +102,24 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
         .map_or(None, |inst| Some(inst.comm_E.to_coordinates())),
     )?;
 
-    // u << |G::Base| despite the fact that u is a scalar.
-    // So we parse all of its bytes as a G::Base element
-    let u = alloc_scalar_as_base::<G, _>(
+    // The following assumptions does not work in PCD setting where
+    // u left and u right might already be 128 bits length so
+    // r * u_right will be 256 bits long. After two such folding,
+    // the result will overflow and result between circuit and prover
+    // will not be equal.
+    //    u << |G::Base| despite the fact that u is a scalar.
+    //    So we parse all of its bytes as a G::Base element
+    // We now allocate via BigNat
+    let u = BigNat::alloc_from_nat(
       cs.namespace(|| "allocate u"),
-      inst.get().map_or(None, |inst| Some(inst.u.clone())),
+      || {
+        Ok(f_to_nat(
+          &inst.get().map_or(G::Scalar::zero(), |inst| inst.u),
+        ))
+      },
+      limb_width,
+      n_limbs,
     )?;
-    println!("\n++++++++\n\t - instance.u {:?}\n\t - Allocated {:?}\n+++++++++\n", inst.get().map_or(None, |inst| Some(inst.u)),u.get_value());
 
     // Allocate X0 and X1. If the input instance is None, then allocate default values 0.
     let X0 = BigNat::alloc_from_nat(
@@ -163,7 +174,12 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     let W = AllocatedPoint::default(cs.namespace(|| "allocate W"))?;
     let E = W.clone();
 
-    let u = W.x.clone(); // In the default case, W.x = u = 0
+    let u = BigNat::alloc_from_nat(
+      cs.namespace(|| "allocate bignat u"),
+      || Ok(f_to_nat(&G::Scalar::zero())),
+      limb_width,
+      n_limbs,
+    )?;
 
     let X0 = BigNat::alloc_from_nat(
       cs.namespace(|| "allocate x_default[0]"),
@@ -205,24 +221,30 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
   ) -> Result<Self, SynthesisError> {
     let E = AllocatedPoint::default(cs.namespace(|| "allocate W"))?;
 
-    let u = alloc_one(cs.namespace(|| "one"))?;
+    let aone = alloc_one(cs.namespace(|| "allocate one"))?;
+    let u = BigNat::from_num(
+      cs.namespace(|| "allocate u from r1cs"),
+      Num::from(aone),
+      limb_width,
+      n_limbs,
+    )?;
 
     let X0 = BigNat::from_num(
-      cs.namespace(|| "allocate X0 from relaxed r1cs"),
+      cs.namespace(|| "allocate X0 from r1cs"),
       Num::from(inst.X0.clone()),
       limb_width,
       n_limbs,
     )?;
 
     let X1 = BigNat::from_num(
-      cs.namespace(|| "allocate X1 from relaxed r1cs"),
+      cs.namespace(|| "allocate X1 from r1cs"),
       Num::from(inst.X1.clone()),
       limb_width,
       n_limbs,
     )?;
 
     let X2 = BigNat::from_num(
-      cs.namespace(|| "allocate X2 from relaxed r1cs"),
+      cs.namespace(|| "allocate X2 from r1cs"),
       Num::from(inst.X2.clone()),
       limb_width,
       n_limbs,
@@ -250,9 +272,10 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     ro.absorb(self.E.x.clone());
     ro.absorb(self.E.y.clone());
     ro.absorb(self.E.is_infinity.clone());
-    ro.absorb(self.u.clone());
 
-    // Analyze X0 as limbs
+    self
+      .u
+      .absorb_in_ro(cs.namespace(|| "u from limb to num"), ro)?;
     self
       .X0
       .absorb_in_ro(cs.namespace(|| "X0 from limb to num"), ro)?;
@@ -295,28 +318,6 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     // E_fold = self.E + r * T
     let rT = T.scalar_mul(cs.namespace(|| "r * T"), r_bits)?;
     let E_fold = self.E.add(cs.namespace(|| "self.E + r * T"), &rT)?;
-    // XXX no need since u is a strict r1cs instance.
-    // u_u_r = u_u * r
-    //let u_u_r = AllocatedNum::alloc(cs.namespace(|| "u_u_r"), || {
-    //  Ok(*u.u.get_value().get()? * r.get_value().get()?)
-    //})?;
-    //cs.enforce(
-    //  || "u_u_r enforce",
-    //  |lc| lc + u.u.get_variable(),
-    //  |lc| lc + r.get_variable(),
-    //  |lc| lc + u_u_r.get_variable(),
-    //);
-    // U_fold = U_u + r* u_u - since u_u is one we dont need to
-    let u_fold = AllocatedNum::alloc(cs.namespace(|| "u_fold"), || {
-      Ok(*self.u.get_value().get()? + r.get_value().get()?)
-    })?;
-    cs.enforce(
-      || "Check u_fold",
-      |lc| lc,
-      |lc| lc,
-      |lc| lc + u_fold.get_variable() - self.u.get_variable() - r.get_variable(),
-    );
-
     // Fold the IO:
     // Analyze r into limbs
     let r_bn = BigNat::from_num(
@@ -334,6 +335,9 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
       n_limbs,
     )?;
 
+    // it's one because the right side of the folding is a simple r1cs isntance
+    let aone = alloc_one(cs.namespace(|| "allocate one"))?;
+    let u_u = BigNat::from_num(cs.namespace(|| "u.u"), Num::from(aone), limb_width, n_limbs)?;
     let u_X0 = BigNat::from_num(
       cs.namespace(|| "u.X0"),
       Num::from(u.X0.clone()),
@@ -352,7 +356,14 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
       limb_width,
       n_limbs,
     )?;
-
+    // TODO note in this case, we should be able to deal with native arithm since u.u is 1 but for symmetry with this PoC code, let's do it this way
+    let new_u = rlc(
+      cs.namespace(|| "U.u & u.u folding"),
+      &self.u,
+      &r_bn,
+      &u_u,
+      &m_bn,
+    )?;
     let new_x0 = rlc(cs.namespace(|| "x0 folding"), &self.X0, &r_bn, &u_X0, &m_bn)?;
     let new_x1 = rlc(cs.namespace(|| "x1 folding"), &self.X1, &r_bn, &u_X1, &m_bn)?;
     let new_x2 = rlc(cs.namespace(|| "x2 folding"), &self.X2, &r_bn, &u_X2, &m_bn)?;
@@ -360,7 +371,7 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     Ok(Self {
       W: W_fold,
       E: E_fold,
-      u: u_fold,
+      u: new_u,
       X0: new_x0,
       X1: new_x1,
       X2: new_x2,
@@ -382,7 +393,7 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
   ) -> Result<AllocatedRelaxedR1CSInstance<G>, SynthesisError> {
     // Compute r:
     // Why this hardcoded 10 or 13...
-    let mut ro = G::ROCircuit::new(ro_consts, NUM_FE_FOR_RO + 13);
+    let mut ro = G::ROCircuit::new(ro_consts, NUM_FE_FOR_RO + 16);
     ro.absorb(params);
     self.absorb_in_ro(cs.namespace(|| "absorb running instance"), &mut ro)?;
     u.absorb_in_ro(cs.namespace(|| "absorb running instance u"), &mut ro)?;
@@ -406,28 +417,6 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
       .E
       .add(cs.namespace(|| "self.E + r * T"), &rT_plus_r_squared_E_2)?;
 
-    // u_fold = u_r + r
-    let u_u_r = AllocatedNum::alloc(cs.namespace(|| "u_u times r"), || {
-      Ok(*u.u.get_value().get()? * r.get_value().get()?)
-    })?;
-    // TODO : reput after debugging
-    //cs.enforce(
-    //  || "u_u_r enforce",
-    //  |lc| lc + u.u.get_variable(),
-    //  |lc| lc + r.get_variable(),
-    //  |lc| lc + u_u_r.get_variable(),
-    //);
-
-    let u_fold = AllocatedNum::alloc(cs.namespace(|| "u_fold"), || {
-      Ok(*self.u.get_value().get()? + u_u_r.get_value().get()?)
-    })?;
-    cs.enforce(
-      || "Check u_fold",
-      |lc| lc,
-      |lc| lc,
-      |lc| lc + u_fold.get_variable() - self.u.get_variable() - u_u_r.get_variable(),
-    );
-
     // Fold the IO:
     // Analyze r into limbs
     let r_bn = BigNat::from_num(
@@ -445,6 +434,13 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
       n_limbs,
     )?;
 
+    let new_u = rlc(
+      cs.namespace(|| "U.u & u.u folding"),
+      &self.u,
+      &r_bn,
+      &u.u,
+      &m_bn,
+    )?;
     let X0_fold = rlc(cs.namespace(|| "folding X0"), &self.X0, &r_bn, &u.X0, &m_bn)?;
     let X1_fold = rlc(cs.namespace(|| "folding X1"), &self.X1, &r_bn, &u.X1, &m_bn)?;
     let X2_fold = rlc(cs.namespace(|| "folding X2"), &self.X2, &r_bn, &u.X2, &m_bn)?;
@@ -452,7 +448,7 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     Ok(Self {
       W: W_fold,
       E: E_fold,
-      u: u_fold,
+      u: new_u,
       X0: X0_fold,
       X1: X1_fold,
       X2: X2_fold,
@@ -480,7 +476,7 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
       condition,
     )?;
 
-    let u = conditionally_select(
+    let u = conditionally_select_bignat(
       cs.namespace(|| "u = cond ? self.u : other.u"),
       &self.u,
       &other.u,

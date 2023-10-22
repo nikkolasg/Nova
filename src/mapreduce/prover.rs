@@ -907,7 +907,7 @@ mod tests {
       AverageCircuit<<G1 as Group>::Scalar>,
       TrivialTestCircuit<<G2 as Group>::Scalar>,
     >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
-    let n = 5;
+    let n = 8;
     let (z1s, z2s) = (0..n)
       .map(|i| (vec![F1::from(i)], vec![F2::from(i)]))
       .unzip();

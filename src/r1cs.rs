@@ -633,7 +633,13 @@ impl<G: Group> AbsorbInROTrait<G> for RelaxedR1CSInstance<G> {
   fn absorb_in_ro(&self, ro: &mut G::RO) {
     self.comm_W.absorb_in_ro(ro);
     self.comm_E.absorb_in_ro(ro);
-    ro.absorb(scalar_as_base::<G>(self.u));
+    // We dont have this assumption anymore with PCD folding RR1CS x RR1CS
+    //ro.absorb(scalar_as_base::<G>(self.u));
+    let limbs: Vec<G::Scalar> =
+      nat_to_limbs(&f_to_nat(&self.u), BN_LIMB_WIDTH, BN_N_LIMBS).unwrap();
+    for limb in limbs {
+      ro.absorb(scalar_as_base::<G>(limb));
+    }
 
     // absorb each element of self.X in bignum format
     for x in &self.X {
