@@ -1,9 +1,12 @@
+use crate::traits::ROCircuitTrait;
+
 use super::{
   util::{
     Bitvector, Num, {f_to_nat, nat_to_f},
   },
   OptionExt,
 };
+use bellperson::gadgets::num::AllocatedNum;
 use bellperson::{ConstraintSystem, LinearCombination, SynthesisError};
 use ff::PrimeField;
 use num_bigint::BigInt;
@@ -672,6 +675,26 @@ impl<Scalar: PrimeField> BigNat<Scalar> {
   pub fn n_bits(&self) -> usize {
     assert!(self.params.n_limbs > 0);
     self.params.limb_width * (self.params.n_limbs - 1) + self.params.max_word.bits() as usize
+  }
+
+  pub fn absorb_in_ro<CS: ConstraintSystem<Scalar>, RO: ROCircuitTrait<Scalar>>(
+    &self,
+    mut cs: CS,
+    ro: &mut RO,
+  ) -> Result<(), SynthesisError> {
+    let bn = self
+      .as_limbs::<CS>()
+      .iter()
+      .enumerate()
+      .map(|(i, limb)| {
+        limb.as_allocated_num(cs.namespace(|| format!("convert limb {i} of to num")))
+      })
+      .collect::<Result<Vec<AllocatedNum<Scalar>>, _>>()?;
+
+    for limb in bn.into_iter() {
+      ro.absorb(limb);
+    }
+    Ok(())
   }
 }
 

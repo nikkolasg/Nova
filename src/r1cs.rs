@@ -122,9 +122,10 @@ impl<G: Group> R1CSShape<G> {
     }
 
     // We require the number of public inputs/outputs to be even
-    if num_io % 2 != 0 {
-      return Err(NovaError::OddInputLength);
-    }
+    // WHY ?? In mapreduce there are three IO
+    //if num_io % 2 != 0 {
+    //  return Err(NovaError::OddInputLength);
+    //}
 
     let digest = Self::compute_digest(num_cons, num_vars, num_io, A, B, C);
 
@@ -269,7 +270,7 @@ impl<G: Group> R1CSShape<G> {
     };
 
     let (AZ_2, BZ_2, CZ_2) = {
-      let Z2 = concat(vec![W2.W.clone(), vec![G::Scalar::one()], U2.X.clone()]);
+      let Z2 = concat(vec![W2.W.clone(), vec![U2.u], U2.X.clone()]);
       self.multiply_vec(&Z2)?
     };
 
@@ -287,7 +288,7 @@ impl<G: Group> R1CSShape<G> {
       .collect::<Vec<G::Scalar>>();
     let u_2_cdot_CZ_1 = (0..CZ_1.len())
       .into_par_iter()
-      .map(|i| CZ_1[i])
+      .map(|i| U2.u * CZ_1[i])
       .collect::<Vec<G::Scalar>>();
 
     let T = AZ_1_circ_BZ_2
@@ -566,12 +567,12 @@ impl<G: Group> RelaxedR1CSInstance<G> {
     }
   }
 
-   pub fn absorb_in_ro_as_R1CS(&self, ro: &mut G::RO) {
-      self.comm_W.absorb_in_ro(ro);
-      for x in &self.X {
-        ro.absorb(scalar_as_base::<G>(*x));
-      }
+  pub fn absorb_in_ro_as_R1CS(&self, ro: &mut G::RO) {
+    self.comm_W.absorb_in_ro(ro);
+    for x in &self.X {
+      ro.absorb(scalar_as_base::<G>(*x));
     }
+  }
 
   /// Initializes a new RelaxedR1CSInstance from an R1CSInstance
   pub fn from_r1cs_instance(
@@ -632,7 +633,13 @@ impl<G: Group> AbsorbInROTrait<G> for RelaxedR1CSInstance<G> {
   fn absorb_in_ro(&self, ro: &mut G::RO) {
     self.comm_W.absorb_in_ro(ro);
     self.comm_E.absorb_in_ro(ro);
-    ro.absorb(scalar_as_base::<G>(self.u));
+    // We dont have this assumption anymore with PCD folding RR1CS x RR1CS
+    //ro.absorb(scalar_as_base::<G>(self.u));
+    let limbs: Vec<G::Scalar> =
+      nat_to_limbs(&f_to_nat(&self.u), BN_LIMB_WIDTH, BN_N_LIMBS).unwrap();
+    for limb in limbs {
+      ro.absorb(scalar_as_base::<G>(limb));
+    }
 
     // absorb each element of self.X in bignum format
     for x in &self.X {

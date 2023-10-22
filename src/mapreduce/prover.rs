@@ -50,6 +50,7 @@ use bellperson::{
     test::TestConstraintSystem,
     Assignment,
   },
+  util_cs::test_cs,
   Circuit, ConstraintSystem, Index, SynthesisError,
 };
 use core::marker::PhantomData;
@@ -384,6 +385,7 @@ where
 
     println!(" !! End of MAP step: u_primary.X0: {:?}", u_primary.X[0]);
     println!(" !! End of MAP step: u_primary.X1: {:?}", u_primary.X[1]);
+    println!(" !! End of MAP step: u_primary.X2: {:?}", u_primary.X[2]);
     println!(
       " !! End of MAP step: u_secondary.X0: {:?}",
       u_secondary.X[0]
@@ -460,6 +462,12 @@ where
       &right_W_secondary,
       true,
     )?;
+    //println!(
+    //  "[+] PROVER: secondary U_fold {:?} with right relaxed: {:?}, gives {:?}",
+    //  left_U_secondary.comm_W.to_coordinates(),
+    //  right_U_secondary.comm_W.to_coordinates(),
+    //  U_secondary.comm_W.to_coordinates(),
+    //);
 
     // Next we construct a proof of this folding and of the invocation of F
 
@@ -497,9 +505,11 @@ where
       println!("----- MERGE primary TEST circuit ----");
       let mut test_cs_primary = TestConstraintSystem::new();
       let _ = circuit_primary.synthesize(&mut test_cs_primary)?;
-      println!("!! UNSATISFIED MERGE PRIMARY CIRCUIT !!");
+      println!("\t--> Are there unsatisfied constraints ?");
       println!("\t{:?}", test_cs_primary.which_is_unsatisfied());
-      panic!("unsatisfied merge primary circuit");
+      if !test_cs_primary.is_satisfied() {
+        panic!("unsatisfied merge primary circuit");
+      }
     }
 
     let (u_primary, w_primary) =
@@ -513,6 +523,10 @@ where
     let w_primary = RelaxedR1CSWitness::from_r1cs_witness(&self.pp.r1cs_shape_primary, &w_primary);
 
     println!("----- MERGE secondary circuit ----");
+    // we want to fold
+    // * L_i and l_i (just generated) into L_i+1 (proving F^(i)(z0) = zi)
+    // * then L_i+1 and R_i+1 (from previous iteration) into U_i+1
+    // We do one less folding because the first circuit only "output one" fresh instance, not two.
     // Now we fold the instances of the primary proof
     let (nifs_left_primary, (left_U_primary, left_W_primary)) = NIFS::prove(
       &self.pp.ck_primary,
@@ -520,37 +534,62 @@ where
       &self.pp.r1cs_shape_primary,
       &left.U_primary,
       &left.W_primary,
-      &left.u_primary,
-      &left.w_primary,
+      // we must give the one just generated above to "make the link" - left.u_primary has already been
+      // given in the map step.
+      &u_primary,
+      &w_primary,
       false,
     )?;
-    let (nifs_right_primary, (right_U_primary, right_W_primary)) = NIFS::prove(
-      &self.pp.ck_primary,
-      &self.pp.ro_consts_primary,
-      &self.pp.r1cs_shape_primary,
-      &right.U_primary,
-      &right.W_primary,
-      &right.u_primary,
-      &right.w_primary,
-      false,
-    )?;
+    println!(
+      "[+] PROVER : (2 step) MERGE  left_U_primary {:?} with previous computed u_primary {:?} gives {:?}",
+      left.U_primary.comm_W.to_coordinates(),
+      u_primary.comm_W.to_coordinates(),
+      left_U_primary.comm_W.to_coordinates()
+    );
+    println!(
+      "\t - left_U.commW {:?} & u.commW {:?} ",
+      left.U_primary.comm_W.to_coordinates(),
+      u_primary.comm_W.to_coordinates()
+    );
+    println!(
+      "\t - commT {:?}",
+      Commitment::<G1>::decompress(&nifs_left_primary.comm_T)?.to_coordinates()
+    );
+    println!(
+      "\t - left_U.u {:?} & u.u {:?} ",
+      left.U_primary.u, u_primary.u
+    );
+    println!(
+      "\t - left_U.X0 {:?} & u.X0 {:?} ",
+      left.U_primary.X[0], u_primary.X[0]
+    );
+    println!(
+      "\t - left_U.X1 {:?} & u.X1 {:?} ",
+      left.U_primary.X[1], u_primary.X[1]
+    );
+    println!(
+      "\t - left_U.X2 {:?} & u.X2 {:?} ",
+      left.U_primary.X[2], u_primary.X[2]
+    );
     let (nifs_primary, (U_primary, W_primary)) = NIFS::prove(
       &self.pp.ck_primary,
       &self.pp.ro_consts_primary,
       &self.pp.r1cs_shape_primary,
       &left_U_primary,
       &left_W_primary,
-      &right_U_primary,
-      &right_W_primary,
+      &right.U_primary,
+      &right.W_primary,
       true,
     )?;
+    println!(
+      "[+] PROVER : MERGE SECONDARY U_fold {:?} with right relaxed {:?} gives {:?}",
+      left_U_primary.comm_W.to_coordinates(),
+      right.U_primary.comm_W.to_coordinates(),
+      U_primary.comm_W.to_coordinates()
+    );
 
     // Next we construct a proof of this folding in the secondary curve
     let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
-    println!(
-      " -- MERGE STEP: Left.u_primary.X0 == {:?}",
-      left.u_primary.X[0]
-    );
 
     let inputs_secondary: NovaAugmentedParallelCircuitInputs<G1> =
       NovaAugmentedParallelCircuitInputs::<G1>::new(
@@ -563,12 +602,17 @@ where
         left.z_end_secondary.clone(),
         right.z_start_secondary,
         right.z_end_secondary.clone(),
-        Some(left.U_primary),
-        Some(left.u_primary),
-        Some(right.U_primary),
-        Some(right.u_primary),
+        Some(left.U_primary), // proves correct exec of F^(i)(z0)=zi
+        // NOTE how we take the instance just generated here !
+        // TODO: We actually should not need to clone since we don't even nee
+        Some(u_primary.clone()), // proves correct exec of F(zi,ri) = zi+1 (proves exec of F & the merge)
+        Some(right.U_primary),   // proves correct exec of F^(i)(r0)=ri
+        Some(RelaxedR1CSInstance::default(
+          &self.pp.ck_primary,
+          &self.pp.r1cs_shape_primary,
+        )),
         Some(Commitment::<G1>::decompress(&nifs_left_primary.comm_T)?),
-        Some(Commitment::<G1>::decompress(&nifs_right_primary.comm_T)?),
+        Some(Commitment::<G1>::default()), // since we don't fold R and r together, no T as well
         Some(Commitment::<G1>::decompress(&nifs_primary.comm_T)?),
       );
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
@@ -578,12 +622,15 @@ where
       self.pp.ro_consts_circuit_secondary.clone(),
     );
     let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
-    if false {
+    if true {
       println!("----- MERGE secondary TEST circuit ----");
       let mut test_cs_secondary = TestConstraintSystem::new();
       let _ = circuit_secondary.synthesize(&mut test_cs_secondary)?;
-      println!("UNSATISFIED SECONDARY CIRCUIT");
+      println!("\t--> Are there unsatisfied constraints ?");
       println!("\t{:?}", test_cs_secondary.which_is_unsatisfied());
+      if !test_cs_secondary.is_satisfied() {
+        panic!("Unsatisfied secondary circuit");
+      }
     }
     let (u_secondary, w_secondary) = cs_secondary
       .r1cs_instance_and_witness(&self.pp.r1cs_shape_secondary, &self.pp.ck_secondary)?;
@@ -601,6 +648,14 @@ where
     // we know we have proven for this range.
     let i_start = left.i_start.clone();
     let i_end = right.i_end.clone();
+    println!("[+] PROVER MERGE output:");
+    println!("\t - (i_start,i_end) = ({},{})", i_start, i_end);
+    println!("\t - U_primary = {:?}", U_primary.comm_W.to_coordinates());
+    println!(
+      "\t - U_secondary.W  = {:?}",
+      U_secondary.comm_W.to_coordinates()
+    );
+    println!("\t\t - U_secondary.u: {:?}", U_secondary.u);
     // z_start is technically useless after the map step, because reduce always take
     // the output and do not hash the first values. Nevertheless since we are in a single circuit
     // we have to give it as input always, as the "map" function is always computed.
@@ -658,7 +713,6 @@ where
   }
 
   // TODO: currently just check the shape, need to verify hash consistency
-  #[cfg(test)]
   fn verify(&self) -> Result<(), NovaError> {
     self
       .pp
@@ -692,102 +746,77 @@ where
   }
 }
 
-/// Structure for parallelization
-#[derive(Clone)]
-pub struct ParallelSNARK<'a, G1, G2, C1, C2>
-where
-  G1: Group<Base = <G2 as Group>::Scalar>,
-  G2: Group<Base = <G1 as Group>::Scalar>,
-  C1: MapReduceCircuit<G1::Scalar>,
-  C2: MapReduceCircuit<G2::Scalar>,
-{
-  pp: &'a PublicParams<G1, G2, C1, C2>,
-  nodes: Vec<TreeNode<'a, G1, G2, C1, C2>>,
-}
-
 /// Implementation for parallelization SNARK
-impl<'a, G1, G2, C1, C2> ParallelSNARK<'a, G1, G2, C1, C2>
+pub fn vec_map_reduce<'a, G1, G2, C1, C2>(
+  pp: &'a PublicParams<G1, G2, C1, C2>,
+  // Each z0 for each leaf, independent
+  z0s_primary: Vec<Vec<G1::Scalar>>,
+  z0_secondary: Vec<Vec<G2::Scalar>>,
+  c_primary: C1,
+  c_secondary: C2,
+) -> Result<TreeNode<'a, G1, G2, C1, C2>, NovaError>
 where
   G1: Group<Base = <G2 as Group>::Scalar>,
   G2: Group<Base = <G1 as Group>::Scalar>,
   C1: MapReduceCircuit<G1::Scalar>,
   C2: MapReduceCircuit<G2::Scalar>,
 {
-  /// Create a new instance of parallel SNARK
-  pub fn prove(
-    pp: &'a PublicParams<G1, G2, C1, C2>,
-    // Each z0 for each leaf, independent
-    z0s_primary: Vec<Vec<G1::Scalar>>,
-    z0_secondary: Vec<Vec<G2::Scalar>>,
-    c_primary: C1,
-    c_secondary: C2,
-  ) -> Result<Self, NovaError> {
-    let leaves = z0s_primary
-      .into_par_iter()
-      .zip(z0_secondary)
-      .enumerate()
-      .map(|(i, (z0p, z0s))| {
-        TreeNode::map_step(
-          &pp,
-          c_primary.clone(),
-          c_secondary.clone(),
-          i as u64,
-          z0p,
-          z0s,
-        )
-      })
-      .collect::<Result<Vec<_>, _>>()?;
-    // Calculate the max height of the tree
-    // ⌈log2(n)⌉ + 1
-    let max_height = ((leaves.len() as f64).log2().ceil() + 1f64) as usize;
+  let leaves = z0s_primary
+    .into_par_iter()
+    .zip(z0_secondary)
+    .enumerate()
+    .map(|(i, (z0p, z0s))| {
+      TreeNode::map_step(
+        &pp,
+        c_primary.clone(),
+        c_secondary.clone(),
+        i as u64,
+        z0p,
+        z0s,
+      )
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+  // Calculate the max height of the tree
+  // ⌈log2(n)⌉ + 1
+  let max_height = ((leaves.len() as f64).log2().ceil() + 1f64) as usize;
 
-    let mut nodes = leaves;
-    // Build up the tree with max given height
-    for level in 0..max_height {
-      // Exist if we on the root of the tree
-      if nodes.len() == 1 {
-        break;
-      }
-      // New nodes list will reduce a half each round
-      nodes = nodes
-        .par_chunks(2)
-        .map(|item| match item {
-          // There are 2 nodes in the chunk
-          [vl, vr] => vl.clone()
+  let mut nodes = leaves;
+  // Build up the tree with max given height
+  for level in 0..max_height {
+    // Exist if we on the root of the tree
+    if nodes.len() == 1 {
+      break;
+    }
+    println!("\t --- !!! MERGE ALL: nodes.len() = {:?}", nodes.len());
+    // New nodes list will reduce a half each round
+    nodes = nodes
+      .par_chunks(2)
+      .map(|item| match item {
+        // There are 2 nodes in the chunk
+        [vl, vr] => vl.clone()
           // TODO remove these clones maybe with iter tools...
             .reduce(vr.clone()),
-          // Just 1 node left, we carry it to the next level
-          [vl] => Ok(vl.clone()),
-          _ => panic!("Invalid chunk size - tree of size not power of two not supported yet"),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    }
-    Ok(Self { pp, nodes })
+        // Just 1 node left, we carry it to the next level
+        [vl] => Ok(vl.clone()),
+        _ => panic!("Invalid chunk size - tree of size not power of two not supported yet"),
+      })
+      .collect::<Result<Vec<_>, _>>()?;
   }
-
-  // --------------------------------------------------------------------------------------
-  // --------------------------------------------------------------------------------------
-
-  /// Get all nodes from given instance
-  pub fn get_nodes(&self) -> Vec<TreeNode<G1, G2, C1, C2>> {
-    self.nodes.clone()
-  }
-
-  /// Get current length of current level
-  pub fn get_tree_size(&self) -> usize {
-    self.nodes.len()
-  }
+  Ok(nodes[0].clone())
 }
 
 mod tests {
   use super::*;
   type G1 = pasta_curves::pallas::Point;
+  type F1 = pasta_curves::pallas::Scalar;
   type G2 = pasta_curves::vesta::Point;
+  type F2 = pasta_curves::vesta::Scalar;
   use crate::mapreduce::circuit::{MapReduceArity, MapReduceCircuit};
   use crate::traits::circuit::{StepCircuit, TrivialTestCircuit};
   use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
   use core::marker::PhantomData;
   use ff::PrimeField;
+  use num_integer::Average;
 
   #[derive(Clone, Debug, Default)]
   struct AverageCircuit<F: PrimeField> {
@@ -840,6 +869,105 @@ mod tests {
   }
 
   use eyre::Result;
+
+  #[test]
+  fn test_parallel_snark() -> Result<()> {
+    let pp = PublicParams::<
+      G1,
+      G2,
+      AverageCircuit<<G1 as Group>::Scalar>,
+      TrivialTestCircuit<<G2 as Group>::Scalar>,
+    >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
+    let n = 8;
+    let (z1s, z2s) = (0..n)
+      .map(|i| (vec![F1::from(i)], vec![F2::from(i)]))
+      .unzip();
+    let total = <G1 as Group>::Scalar::from((0..n).sum::<u64>());
+    let result_instance = vec_map_reduce(
+      &pp,
+      z1s,
+      z2s,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+    )?;
+    result_instance.verify()?;
+    assert!(result_instance.data.z_end_primary[0] == total);
+    Ok(())
+  }
+
+  #[test]
+  fn test_mapreduce_two_reduce() -> Result<()> {
+    // produce public parameters
+    let pp = PublicParams::<
+      G1,
+      G2,
+      AverageCircuit<<G1 as Group>::Scalar>,
+      TrivialTestCircuit<<G2 as Group>::Scalar>,
+    >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
+    let one = <G1 as Group>::Scalar::one();
+    let two = one + one;
+    let one2 = <G2 as Group>::Scalar::one();
+    let two2 = one2 + one2;
+    let four2 = two2 + two2;
+
+    println!(" --- FIRST LEAF PROVING ---");
+    let leaf_0 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      0,
+      vec![one],
+      vec![four2],
+    )?;
+    leaf_0.verify()?;
+
+    println!(" --- SECOND LEAF PROVING ---");
+    let leaf_1 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      1,
+      vec![two],
+      vec![four2],
+    )?;
+
+    leaf_1.verify()?;
+
+    // println!(" --- THIRD LEAF PROVING ---");
+    let leaf_2 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      2,
+      vec![one],
+      vec![four2],
+    )?;
+    leaf_2.verify()?;
+
+    // println!(" --- FOURTH LEAF PROVING ---");
+    let leaf_3 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      3,
+      vec![two],
+      vec![four2],
+    )?;
+    leaf_3.verify()?;
+
+    println!(" --- MERGE 01 PROVING ---");
+    let merged01 = leaf_0.reduce(leaf_1)?;
+    merged01.verify()?;
+    // println!("\n--- MERGE 23 PROVING ---\n");
+    let merged23 = leaf_2.reduce(leaf_3)?;
+    merged23.verify()?;
+
+    // println!("\n--- MERGE of MERGE PROVING ---\n");
+    let merged0123 = merged01.reduce(merged23)?;
+    merged0123.verify()?;
+    Ok(())
+  }
+
   #[test]
   fn test_mapreduce_single() -> Result<()> {
     // produce public parameters
@@ -881,6 +1009,102 @@ mod tests {
     println!(" --- MERGE PROVING ---");
     let merged = leaf_0.reduce(leaf_1)?;
     merged.verify()?;
+    Ok(())
+  }
+
+  #[test]
+  fn test_secondary_fold_mixed() -> Result<(), NovaError> {
+    let pp = PublicParams::<
+      G1,
+      G2,
+      AverageCircuit<<G1 as Group>::Scalar>,
+      TrivialTestCircuit<<G2 as Group>::Scalar>,
+    >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
+    let one = <G1 as Group>::Scalar::one();
+    let two = one + one;
+    let one2 = <G2 as Group>::Scalar::one();
+    let two2 = one2 + one2;
+    let four2 = two2 + two2;
+
+    println!(" --- FIRST LEAF PROVING ---");
+    let leaf_0 = TreeNode::map_step(
+      &pp,
+      AverageCircuit::default(),
+      TrivialTestCircuit::default(),
+      0,
+      vec![one],
+      vec![four2],
+    )?;
+    leaf_0.verify().expect("leaf 0 verification failed");
+    let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
+      &pp.ck_secondary,
+      &pp.ro_consts_secondary,
+      &pp.r1cs_shape_secondary,
+      &leaf_0.data.U_secondary,
+      &leaf_0.data.W_secondary,
+      &leaf_0.data.u_secondary,
+      &leaf_0.data.w_secondary,
+      false,
+    )?;
+    pp.r1cs_shape_secondary
+      .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
+      .expect("first NIFS is not sat");
+
+    // do it again
+    let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
+      &pp.ck_secondary,
+      &pp.ro_consts_secondary,
+      &pp.r1cs_shape_secondary,
+      &left_U_secondary,
+      &left_W_secondary,
+      &left_U_secondary,
+      &left_W_secondary,
+      true,
+    )?;
+    pp.r1cs_shape_secondary
+      .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
+      .expect("second NIFS is not sat");
+
+    //println!(" --- SECOND LEAF PROVING ---");
+    //let leaf_1 = TreeNode::map_step(
+    //  &pp,
+    //  AverageCircuit::default(),
+    //  TrivialTestCircuit::default(),
+    //  1,
+    //  vec![two],
+    //  vec![four2],
+    //)?;
+    //leaf_1.verify().expect("leaf 1 verification failed");
+
+    // do first folding and verify correctness
+    //let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
+    //  &pp.ck_secondary,
+    //  &pp.ro_consts_secondary,
+    //  &pp.r1cs_shape_secondary,
+    //  &leaf_0.data.U_secondary,
+    //  &leaf_0.data.W_secondary,
+    //  &leaf_0.data.u_secondary,
+    //  &leaf_0.data.w_secondary,
+    //  false,
+    //)?;
+    //pp.r1cs_shape_secondary
+    //  .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
+    //  .expect("left secondary instance is not sat");
+
+    //let (nifs_secondary, (U_secondary, W_secondary)) = NIFS::prove(
+    //  &pp.ck_secondary,
+    //  &pp.ro_consts_secondary,
+    //  &pp.r1cs_shape_secondary,
+    //  &left_U_secondary,
+    //  &left_W_secondary,
+    //  &leaf_1.data.U_secondary,
+    //  &leaf_1.data.W_secondary,
+    //  true,
+    //)?;
+    //pp.r1cs_shape_secondary
+    //  .is_sat_relaxed(&pp.ck_secondary, &U_secondary, &W_secondary)
+    //  .expect("secondary instance is not sat");
+
     Ok(())
   }
 }

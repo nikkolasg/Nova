@@ -14,8 +14,8 @@ use crate::{
     ecc::AllocatedPoint,
     r1cs::{AllocatedR1CSInstance, AllocatedRelaxedR1CSInstance},
     utils::{
-      alloc_num_equals, alloc_scalar_as_base, conditionally_select_vec, le_bits_to_num,
-      FixedSizeAllocator, ResizeAllocator,
+      alloc_num_equals, alloc_scalar_as_base, alloc_zero, conditionally_select,
+      conditionally_select_vec, le_bits_to_num, FixedSizeAllocator, ResizeAllocator,
     },
   },
   mapreduce::circuit::{MapReduceArity, MapReduceCircuit},
@@ -245,9 +245,9 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       cs.namespace(|| "allocate T_u"),
       self.inputs.get().map_or(None, |inputs| {
         inputs
-          .T_r
+          .T_u
           .get()
-          .map_or(None, |T_r| Some(T_r.to_coordinates()))
+          .map_or(None, |T_u| Some(T_u.to_coordinates()))
       }),
     )?;
 
@@ -255,9 +255,9 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
       cs.namespace(|| "allocate T_r"),
       self.inputs.get().map_or(None, |inputs| {
         inputs
-          .T_u
+          .T_r
           .get()
-          .map_or(None, |T_u| Some(T_u.to_coordinates()))
+          .map_or(None, |T_r| Some(T_r.to_coordinates()))
       }),
     )?;
 
@@ -324,6 +324,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     T_r: AllocatedPoint<G>,
     T_R_U: AllocatedPoint<G>,
     arity: MapReduceArity,
+    is_base_case: &AllocatedBit,
   ) -> Result<(AllocatedRelaxedR1CSInstance<G>, AllocatedBit), SynthesisError> {
     // Check that u.x[0] = Hash(params, i_start_U, i_end_U, z_U_end, U)
     let mut ro = G::ROCircuit::new(
@@ -344,11 +345,30 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     }
     U.absorb_in_ro(cs.namespace(|| "absorb U"), &mut ro)?;
     println!("[+] Hash Consistency Check for U:");
-    println!("\t - U.W.X: {:?}", U.W.x.get_value());
     println!("\t - params: {:?}", params.get_value());
     println!("\t - i_start_U: {:?}", i_start_U.get_value());
     println!("\t - i_end_U: {:?}", i_end_U.get_value());
-    println!("\t - z_U_end: {:?}", z_U_end[0].get_value());
+    println!(
+      "\t - z_U_end (len {:?}): {:?}",
+      z_U_end.len(),
+      z_U_end[0].get_value()
+    );
+    println!(
+      "\t - U.W.X: {:?}, {:?}, {:?}",
+      U.W.x.get_value(),
+      U.W.y.get_value(),
+      U.W.is_infinity.get_value()
+    );
+    println!(
+      "\t - U.E.X: {:?}, {:?} {:?}",
+      U.E.x.get_value(),
+      U.E.y.get_value(),
+      U.E.is_infinity.get_value()
+    );
+    println!("\t - U.u: {:?}", U.u.value);
+    println!("\t - U.X0: {:?}", U.X0.value);
+    println!("\t - U.X1: {:?}", U.X1.value);
+    println!("\t - U.X2 {:?}", U.X2.value);
 
     let hash_bits = ro.squeeze(cs.namespace(|| "Input hash first"), NUM_HASH_BITS)?;
     let hash_u = le_bits_to_num(cs.namespace(|| "bits to hash first"), hash_bits)?;
@@ -364,11 +384,49 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     let U_fold = U.fold_with_r1cs(
       cs.namespace(|| "compute fold of U and u"),
       params.clone(),
-      u,
-      T_u,
+      u.clone(), // ARGH. All these function should take a reference.
+      T_u.clone(),
       self.ro_consts.clone(),
       self.params.limb_width,
       self.params.n_limbs,
+    )?;
+    println!(
+      "[+] CIRCUIT: MERGE (a) left_U {:?} with previous computed u {:?} gives {:?}",
+      U.W.x.get_value(),
+      u.W.x.get_value(),
+      U_fold.W.x.get_value()
+    );
+    println!(
+      "\t - left_U.u {:?} & Unew.u {:?}",
+      U.u.value, U_fold.u.value
+    );
+
+    // CHECK if we are in secondary circuit: if we are, then the folding operates a little bit differently.
+    // In first circuit, we operate  as per the book.
+    // In second circuit, we don't take "r" as it is null, but we take u.X1, because it comes from the previous circuit
+    // on the first curve that already "merged" right and left.
+    // To check if we are on second circuit,we enforce that the right instance is null. We here simply check if
+    // the first input is 0 or not (assuming we're not in base case).
+    let zero_num = &alloc_zero(cs.namespace(|| "alloczero"))?;
+    let is_r_instance_zero = alloc_num_equals(
+      cs.namespace(|| "check right instance zero"),
+      &r.X0,
+      &zero_num,
+    )?;
+    let is_nonbase_secondary = AllocatedBit::and_not(
+      cs.namespace(|| "check if we are in non base case & secondary circuit"),
+      &is_r_instance_zero,
+      &is_base_case,
+    )?;
+    println!(
+      "[+] is SECONDARY Non Base circuit ? {:?} ",
+      is_nonbase_secondary.get_value()
+    );
+    let right_io = conditionally_select(
+      cs.namespace(|| "compute U_new"),
+      &u.X1,
+      &r.X0,
+      &Boolean::from(is_nonbase_secondary.clone()),
     )?;
 
     // Check that r.x[0] = Hash(params, i_start_R, i_end_R, z_R_end, R)
@@ -393,32 +451,63 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> NovaAugmentedParallelCircuit<G, MR
     let hash_r = le_bits_to_num(cs.namespace(|| "bits to hash second"), hash_bits)?;
     println!("NonBaseCase: check Hash_r= {:?}", hash_r.get_value());
     let check_pass_r = alloc_num_equals(
-      cs.namespace(|| "check consistency of r.X[0] with H(params, R, i, z_r_start, z_r_end)"),
-      &r.X0,
+      cs.namespace(|| {
+        "check consistency of right instance with H(params, R, i, z_r_start, z_r_end)"
+      }),
+      &right_io,
       &hash_r,
     )?;
 
     // Run NIFS Verifier
+    // Note in secondary circuit, we don't care about the result of this function.
     let R_fold = R.fold_with_r1cs(
       cs.namespace(|| "compute fold of R and r"),
       params.clone(),
-      r,
+      r.clone(),
       T_r,
       self.ro_consts.clone(),
       self.params.limb_width,
       self.params.n_limbs,
     )?;
+    println!(
+      "[+] CIRCUIT: MERGE (b) R {:?} with previous computed r {:?} gives {:?}",
+      R.W.x.get_value(),
+      r.W.x.get_value(),
+      R_fold.W.x.get_value()
+    );
 
+    println!("\t - R.u {:?} & Unew.u {:?}", U.u.value, U_fold.u.value);
+
+    // In first circuit, we fold U_i+1 and R_i+1
+    // In second circuit, we fold U_i+1 and R_i <-- this is because U_i+1 already
+    // attests to the validity of the merge function on the first circuit already.
+    // Note the prover make sure it gives the right T_R_U corresponding to the right
+    // chosen relaxed instance.
+    let right_relaxed = R.conditionally_select(
+      cs.namespace(|| "choosing right_relaxed"),
+      R_fold,
+      &Boolean::from(is_nonbase_secondary),
+    )?;
     // Run NIFS Verifier
     let U_R_fold = U_fold.fold_with_relaxed_r1cs(
       cs.namespace(|| "compute fold of U and R"),
       params,
-      R_fold,
-      T_R_U,
+      right_relaxed.clone(),
+      T_R_U.clone(),
       self.ro_consts.clone(),
       self.params.limb_width,
       self.params.n_limbs,
     )?;
+    println!(
+      "[+] CIRCUIT: MERGE (c) U_fold {:?} with right relaxed: {:?}, gives {:?}",
+      U_fold.W.x.get_value(),
+      right_relaxed.W.x.get_value(),
+      U_R_fold.W.x.get_value(),
+    );
+    println!(
+      "\t - U_fold.u {:?}\n\t - R_fold {:?}\n\t - Unew.u {:?}",
+      U_fold.u.value, right_relaxed.u.value, U_R_fold.u.value
+    );
 
     let hashChecks = AllocatedBit::and(
       cs.namespace(|| "check both hashes are correct"),
@@ -474,6 +563,10 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       &i_start_U.clone(),
       &i_end_U,
     )?;
+    // even though we don't use anything from the right side in base case, it's important
+    // to check that they're equal. Later in the circuit, we check that i_end_U + 1 == i_start R
+    // so we also need to enforce that i_end_R == i_start_R in base case otherwise the resulting range
+    // [i_start_U, i_end_R] could be anything because i_end_R would not be constrained.
     let right_io_equal = alloc_num_equals(
       cs.namespace(|| "In base case i_start_R == i_end_R"),
       &i_start_R,
@@ -485,6 +578,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       &right_io_equal,
     )?;
     println!("[+] is BASE CASE ? {:?}", is_base_case.get_value());
+
     // Synthesize the circuit for the base case and get the new running instance
     let Unew_base = self.synthesize_base_case(cs.namespace(|| "base case"), u.clone())?;
 
@@ -509,6 +603,7 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       T_r,
       T_R_U,
       arity.clone(),
+      &is_base_case,
     )?;
 
     // Either check_non_base_pass=true or we are in the base case
@@ -530,14 +625,32 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
       Unew_non_base,
       &Boolean::from(is_base_case.clone()),
     )?;
-
-    // Compute i_u_end +1== i_r_start,
-    // [l_start, l_end] and [r_start, r_end] and we need to make sure we're reducing two consecutive ranges
-    // (actually this should not even be needed in the general case as reduce step is associative
-    // but let's put it there for the time being for the sake of staying closer to PSE parallel code).
+    // Compute i_U_end + 1 for base case
+    let i_end_U_base = AllocatedNum::alloc(cs.namespace(|| "i_U_end + 1"), || {
+      Ok(*i_end_U.get_value().get()? + G::Base::one())
+    })?;
+    cs.enforce(
+      || "check new computed i_end_U + 1",
+      |lc| lc,
+      |lc| lc,
+      |lc| lc + i_end_U_base.get_variable() - CS::one() - i_end_U.get_variable(),
+    );
+    let i_end_U_new = conditionally_select(
+      cs.namespace(|| "choose i_end_U in base vs nonbase case"),
+      &i_end_U_base,
+      &i_end_U,
+      &Boolean::from(is_base_case.clone()),
+    )?;
+    // Then check the range equation to make sure the right instance starts at the same index than the left instance
+    // is ending
+    // NOTE: this is in theory strictly not neeeded as reduce step is associative but in things get messy in the constraints
+    // world so we force this consecutive range.
+    // Example:
+    //  * in base case, we initially have [0,0] [1,1]. Then i_U_end_new = 1 so condition checks out, output range is [0,1]
+    //  * in non base case, we have for example [0,1] [1,2]. Then i_U_end_new = 1 (no adding via condition above).
     cs.enforce(
       || "check consecutive range",
-      |lc| lc + i_end_U.get_variable() + CS::one(),
+      |lc| lc + i_end_U_new.get_variable(),
       |lc| lc + CS::one(),
       |lc| lc + i_start_R.get_variable(),
     );
@@ -611,22 +724,70 @@ impl<G: Group, MR: MapReduceCircuit<G::Base>> Circuit<<G as Group>::Base>
     }
     Unew.absorb_in_ro(cs.namespace(|| "absorb U_new"), &mut ro)?;
 
-    println!("[+] Hash Output X1:");
+    println!("[+] Hash Output X2:");
     println!("\t - params: {:?}", params.get_value());
     println!("\t - i_start_U: {:?}", i_start_U.get_value());
-    println!("\t - i_end_U: {:?}", i_end_U.get_value());
-    println!("\t - z_output: {:?}", z_output[0].get_value());
-    println!("\t - Unew.W.x: {:?}", Unew.W.x.get_value());
+    println!("\t - i_end_R: {:?}", i_end_R.get_value());
+    println!(
+      "\t - z_output (len {:?}): {:?}",
+      z_output.len(),
+      z_output[0].get_value()
+    );
+    println!(
+      "\t - U.W.X: {:?}, {:?}, {:?}",
+      Unew.W.x.get_value(),
+      Unew.W.y.get_value(),
+      Unew.W.is_infinity.get_value()
+    );
+    println!(
+      "\t - U.E.X: {:?}, {:?} {:?}",
+      Unew.E.x.get_value(),
+      Unew.E.y.get_value(),
+      Unew.E.is_infinity.get_value()
+    );
+    println!("\t - Unew.u: {:?}", Unew.u.value);
+    println!("\t - Unew.X0: {:?}", Unew.X0.value);
+    println!("\t - Unew.X1: {:?}", Unew.X1.value);
+    println!("\t - Unew.X2: {:?}", Unew.X2.value);
 
     let hash_bits = ro.squeeze(cs.namespace(|| "output hash bits"), NUM_HASH_BITS)?;
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
-    println!(" ==> X1 H = {:?}\n", hash.get_value());
+    println!(" ==> X2 H = {:?}", hash.get_value());
+    println!(" ==> X0 H = {:?}", u.X2.get_value());
+    println!(" ==> X1 H = {:?}", r.X2.get_value());
 
-    u.X1
+    u.X2
       .inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
+    // In non base case secondary circuit, this will be null
+    r.X2
+      .inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
     hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
-    // r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
 
     Ok(())
   }
 }
+
+//pub struct ROCircuitLog<F: Field, R: ROCircuitTrait<F>> {
+//  rocircuit: R,
+//}
+
+//impl<F,R> ROCircuitTrait<F> for ROCircuitLog<F,R> where
+//  Scalar: PrimeField + PrimeFieldBits + Serialize + for<'de> Deserialize<'de>,
+//  R: ROCircuitTrait<F>,
+//  {
+//    type Constants = R::Constants;
+//    fn new(constants: Self::Constants, num_absorbs: usize) -> Self {
+//      Self {
+//        R::new(constants, num_absorbs)
+//      }
+//    }
+//    fn absorb(&mut self, e: AllocatedNum<F>) {
+//        print!("\t - Absorb: {:?}",e);
+//        self.rocircuit.absorb(e);
+//    }
+//    fn squeeze<CS>(&mut self, cs: CS, num_bits: usize) -> Result<Vec<AllocatedBit>, SynthesisError>
+//      where
+//        CS: ConstraintSystem<F> {
+//        self.rocircuit.squeeze(cs, num_bits)
+//    }
+//}
