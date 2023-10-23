@@ -731,7 +731,7 @@ where
   }
 
   // TODO: currently just check the shape, need to verify hash consistency
-  fn verify(&self) -> Result<(Vec<G1::Scalar>, Vec<G2::Scalar>), NovaError> {
+  pub fn verify(&self) -> Result<(Vec<G1::Scalar>, Vec<G2::Scalar>), NovaError> {
     self
       .pp
       .r1cs_shape_primary

@@ -16,33 +16,33 @@ mod bellperson;
 mod circuit;
 mod constants;
 mod nifs;
-mod mapreduce;
 mod parallel_circuit;
 mod r1cs;
 
 // public modules
 pub mod errors;
 pub mod gadgets;
+pub mod mapreduce;
 pub mod parallel_prover;
 pub mod provider;
 pub mod spartan;
 pub mod traits;
 
-use ark_std::{start_timer, end_timer};
 use crate::bellperson::{
   r1cs::{NovaShape, NovaWitness},
   shape_cs::ShapeCS,
   solver::SatisfyingAssignment,
 };
 use ::bellperson::{Circuit, ConstraintSystem};
+use ark_std::{end_timer, start_timer};
 use circuit::{NovaAugmentedCircuit, NovaAugmentedCircuitInputs, NovaAugmentedCircuitParams};
 use constants::{BN_LIMB_WIDTH, BN_N_LIMBS, NUM_FE_WITHOUT_IO_FOR_CRHF, NUM_HASH_BITS};
 use core::marker::PhantomData;
 use errors::NovaError;
-use ff::{Field};
+use ff::Field;
 use gadgets::utils::scalar_as_base;
 use nifs::NIFS;
-use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, };
+use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness};
 use serde::{Deserialize, Serialize};
 use traits::{
   circuit::StepCircuit,
@@ -304,7 +304,6 @@ where
           _p_c1: Default::default(),
           _p_c2: Default::default(),
         })
-
       }
       Some(r_snark) => {
         //let recursive_timer = start_timer!(|| "Recursive case");
@@ -369,7 +368,6 @@ where
           false,
         )?;
         //end_timer!(nifs_prove2_timer);
-
 
         //let nifs_prove1_secondary_timer = start_timer!(|| "NIFS prove secondary 1");
         let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
