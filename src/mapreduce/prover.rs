@@ -421,6 +421,23 @@ where
   /// Merges another node into this node. The node this is called on is treated as the left node and the node which is
   /// consumed is treated as the right node.
   pub fn reduce(self, nright: TreeNode<'a, G1, G2, C1, C2>) -> Result<Self, NovaError> {
+    self.reduce_internal(nright, None, None)
+  }
+  pub fn reduce_with_witness(
+    self,
+    nright: TreeNode<'a, G1, G2, C1, C2>,
+    c1: C1,
+    c2: C2,
+  ) -> Result<Self, NovaError> {
+    self.reduce_internal(nright, Some(c1), Some(c2))
+  }
+
+  fn reduce_internal(
+    self,
+    nright: TreeNode<'a, G1, G2, C1, C2>,
+    c1: Option<C1>,
+    c2: Option<C2>,
+  ) -> Result<Self, NovaError> {
     let left = self.data;
     let right = nright.data;
     // Since there are independent leaves, there is no connection between two ranges
@@ -494,7 +511,7 @@ where
     let circuit_primary: NovaAugmentedParallelCircuit<G2, C1> = NovaAugmentedParallelCircuit::new(
       self.pp.augmented_circuit_params_primary.clone(),
       Some(inputs_primary),
-      self.c_primary.clone(),
+      c1.unwrap_or_else(|| self.c_primary.clone()),
       self.pp.ro_consts_circuit_primary.clone(),
     );
 
@@ -618,7 +635,7 @@ where
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
       self.pp.augmented_circuit_params_secondary.clone(),
       Some(inputs_secondary),
-      self.c_secondary.clone(),
+      c2.unwrap_or_else(|| self.c_secondary.clone()),
       self.pp.ro_consts_circuit_secondary.clone(),
     );
     let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
