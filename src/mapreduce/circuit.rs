@@ -55,8 +55,6 @@ pub trait MapReduceCircuit<F: PrimeField>: Send + Sync + Clone {
     z_right: &[AllocatedNum<F>],
   ) -> Result<Vec<AllocatedNum<F>>, SynthesisError>;
 
-  // TODO: these function should not have to exist, as we can get the output values
-  // from the circuit directly (Vec<AllocatedNum> -> Vec<F>)
   fn output_map(&self, z: &[F]) -> Vec<F>;
   fn output_reduce(&self, z_left: &[F], z_right: &[F]) -> Vec<F>;
 }

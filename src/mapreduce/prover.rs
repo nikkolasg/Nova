@@ -34,6 +34,7 @@ use crate::{
   },
   nifs::NIFS,
   r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, R1CS},
+  scalar_as_base,
   traits::{
     circuit::TrivialTestCircuit,
     commitment::{CommitmentEngineTrait, CommitmentTrait},
@@ -730,7 +731,7 @@ where
   }
 
   // TODO: currently just check the shape, need to verify hash consistency
-  fn verify(&self) -> Result<(), NovaError> {
+  fn verify(&self) -> Result<(Vec<G1::Scalar>, Vec<G2::Scalar>), NovaError> {
     self
       .pp
       .r1cs_shape_primary
@@ -759,7 +760,70 @@ where
           &self.data.u_secondary,
           &self.data.w_secondary,
         )
-      })
+      })?;
+    // number of leaves cannot be zero
+    //if num_leaves == 0 {
+    //  return Err(NovaError::ProofVerifyError);
+    //}
+    //if self.data.i_end != num_leaves {
+    //  return Err(NovaError::ProofVerifyError);
+    //}
+    //if self.data.i_start != 0 {
+    //  return Err(NovaError::ProofVerifyError);
+    //}
+
+    if self.data.u_primary.X.len() != 3
+      || self.data.u_secondary.X.len() != 3
+      || self.data.U_primary.X.len() != 3
+      || self.data.U_secondary.X.len() != 3
+    {
+      return Err(NovaError::ProofVerifyError);
+    }
+    // check if the output hashes in R1CS instances point to the right running instances
+    let hash_primary = {
+      let mut hasher = <G2 as Group>::RO::new(
+        self.pp.ro_consts_secondary.clone(),
+        NUM_FE_WITHOUT_IO_FOR_CRHF + self.c_primary.arity().total_output() + 1,
+      );
+      hasher.absorb(scalar_as_base::<G2>(
+        self.pp.r1cs_shape_secondary.get_digest(),
+      ));
+      hasher.absorb(G1::Scalar::from(self.data.i_start as u64));
+      hasher.absorb(G1::Scalar::from(self.data.i_end as u64));
+      for e in &self.data.z_end_primary {
+        hasher.absorb(*e);
+      }
+      self.data.U_secondary.absorb_in_ro(&mut hasher);
+      hasher.squeeze(NUM_HASH_BITS)
+    };
+
+    if hash_primary != scalar_as_base::<G1>(self.data.u_primary.X[2]) {
+      return Err(NovaError::ProofVerifyError);
+    }
+    let hash_secondary = {
+      let mut hasher = <G1 as Group>::RO::new(
+        self.pp.ro_consts_primary.clone(),
+        NUM_FE_WITHOUT_IO_FOR_CRHF + self.c_secondary.arity().total_output() + 1,
+      );
+      hasher.absorb(scalar_as_base::<G1>(
+        self.pp.r1cs_shape_primary.get_digest(),
+      ));
+      hasher.absorb(G2::Scalar::from(self.data.i_start as u64));
+      hasher.absorb(G2::Scalar::from(self.data.i_end as u64));
+      for e in &self.data.z_end_secondary {
+        hasher.absorb(*e);
+      }
+      self.data.U_primary.absorb_in_ro(&mut hasher);
+      hasher.squeeze(NUM_HASH_BITS)
+    };
+    if hash_secondary != scalar_as_base::<G2>(self.data.u_secondary.X[2]) {
+      return Err(NovaError::ProofVerifyError);
+    }
+    // just to simplify the verification procedure when checking these values outside of the circuit
+    Ok((
+      self.data.z_end_primary.clone(),
+      self.data.z_end_secondary.clone(),
+    ))
   }
 }
 
