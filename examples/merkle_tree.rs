@@ -3,6 +3,7 @@ use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem};
 use eyre::Result as EResult;
 use ff::Field;
 use ff::PrimeField;
+use flate2::{write::ZlibEncoder, Compression};
 use generic_array::typenum::U2;
 use neptune::{circuit2::poseidon_hash_allocated, poseidon::PoseidonConstants};
 use nova_snark::errors::NovaError;
@@ -16,10 +17,13 @@ use nova_snark::{
   },
   traits::circuit::TrivialTestCircuit,
 };
-use rand::prelude::*;
 use rayon::prelude::*;
-use std::{hash::Hash, marker::PhantomData};
+use serde::Serializer;
+use std::marker::PhantomData;
+use std::time::{Duration, Instant};
 
+// Circuit that recursively and in parallel proves the building of a Merkle tree
+// using a generic hash function.
 #[derive(Clone)]
 struct BinaryMTCircuit<F: PrimeField, H: Hasher<F>> {
   h: H,
@@ -55,7 +59,7 @@ where
   }
   fn synthesize_map<CS: ConstraintSystem<F>>(
     &self,
-    cs: &mut CS,
+    _cs: &mut CS,
     z: &[AllocatedNum<F>],
   ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
     Ok(vec![z[0].clone()])
@@ -88,6 +92,7 @@ where
   }
 }
 
+// Poseidon implementation of a Hasher
 #[derive(Clone)]
 struct PoseidonHasher<F: PrimeField> {
   c: PoseidonConstants<F, U2>,
@@ -171,27 +176,100 @@ fn gen_random_leaves<F: PrimeField>(n: usize) -> Vec<F> {
   (0..n).map(|_| F::random(&mut rand::thread_rng())).collect()
 }
 
-fn main() -> EResult<()> {
-  println!("========================================");
-  println!("Parallel Binary Tree Building MapReduce");
-  println!("========================================");
-  type G1 = pasta_curves::pallas::Point;
-  type F1 = pasta_curves::pallas::Scalar;
-  type G2 = pasta_curves::vesta::Point;
-  type F2 = pasta_curves::vesta::Scalar;
-  let n = 12;
-  let leaves = gen_random_leaves::<F1>(n);
-  let hasher = PoseidonHasher::<F1>::new();
-  let root = build_binary_tree_root(&hasher, leaves.clone())?;
-  let circuit = BinaryMTCircuit::new(hasher.clone());
+fn duration_to_ms<S>(x: &Duration, s: S) -> Result<S::Ok, S::Error>
+where
+  S: Serializer,
+{
+  s.serialize_u64(x.as_millis() as u64)
+}
 
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub enum HashFunction {
+  #[default]
+  Poseidon,
+}
+#[derive(Clone, Debug, Default, serde::Serialize)]
+struct BenchParams {
+  pub hash: HashFunction,
+  pub nleaves: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize, Default)]
+struct BenchResult {
+  #[serde(flatten)]
+  pub params: BenchParams,
+  nconstraints: usize,
+  nconstraints2: usize, // secondary circuit
+  #[serde(serialize_with = "duration_to_ms")]
+  prover_setup: Duration,
+  #[serde(serialize_with = "duration_to_ms")]
+  prover_build_tree: Duration,
+  #[serde(serialize_with = "duration_to_ms")]
+  prover_recursion: Duration,
+  witness_size: usize,
+  #[serde(serialize_with = "duration_to_ms")]
+  verification_time: Duration,
+}
+
+fn run_experiment(p: BenchParams) -> EResult<BenchResult> {
+  let mut res = BenchResult {
+    params: p.clone(),
+    ..BenchResult::default()
+  };
+  let n = p.nleaves;
+  let leaves = gen_random_leaves::<F1>(n);
+  let hasher = match p.hash {
+    HashFunction::Poseidon => PoseidonHasher::<F1>::new(),
+  };
+
+  let start = Instant::now();
+  let root = build_binary_tree_root(&hasher, leaves.clone())?;
+  res.prover_build_tree += start.elapsed();
+  let circuit = BinaryMTCircuit::new(hasher.clone());
+  let start = Instant::now();
   let pp = PublicParams::<G1, G2, _, _>::setup(circuit.clone(), TrivialTestCircuit::default())?;
+  res.nconstraints = pp.num_constraints().0;
+  res.nconstraints2 = pp.num_constraints().1;
+  res.prover_setup += start.elapsed();
+  let start = Instant::now();
   let final_instance = build_root_instance::<G1, G2, BinaryMTCircuit<F1, PoseidonHasher<F1>>>(
     &pp,
     circuit.clone(),
     leaves,
   )?;
+  res.prover_recursion += start.elapsed();
+  let start = Instant::now();
   let (root_circuit, _) = final_instance.verify()?;
   assert!(root_circuit[0] == root);
+  res.verification_time += start.elapsed();
+
+  let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+  bincode::serialize_into(&mut encoder, &final_instance.data).unwrap();
+  let buffer = encoder.finish().unwrap();
+  res.witness_size += buffer.len();
+  Ok(res)
+}
+
+type G1 = pasta_curves::pallas::Point;
+type F1 = pasta_curves::pallas::Scalar;
+type G2 = pasta_curves::vesta::Point;
+
+fn main() -> EResult<()> {
+  println!("========================================");
+  println!("Parallel Binary Tree Building MapReduce");
+  println!("========================================");
+  let fname = "bench.csv";
+  println!("[+] Writing results to fresh {} file", &fname);
+  let mut wtr = csv::Writer::from_writer(std::fs::File::create(&fname)?);
+  let leaves = vec![8, 16];
+  for n in leaves {
+    let params = BenchParams {
+      hash: HashFunction::Poseidon,
+      nleaves: n,
+    };
+    println!("[+] Running experiment for {:?}", params);
+    let res = run_experiment(params)?;
+    wtr.serialize(res)?;
+  }
   Ok(())
 }

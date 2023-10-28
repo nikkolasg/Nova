@@ -121,7 +121,6 @@ where
       ro_consts_circuit_primary.clone(),
     );
     let mut cs: ShapeCS<G1> = ShapeCS::new();
-    println!("BEFORE FIRST SNYTHESIS");
     if false {
       let mut tcs = TestConstraintSystem::new();
       let _ = circuit_primary.clone().synthesize(&mut tcs)?;
@@ -132,7 +131,6 @@ where
       .synthesize(&mut cs)
       .map_err(|e| NovaError::SynthesisError(e))?;
     let (r1cs_shape_primary, ck_primary) = cs.r1cs_shape();
-    println!("PASSED FIRST SNYTHESIS");
     // Initialize ck for the secondary
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
       augmented_circuit_params_secondary.clone(),
@@ -274,7 +272,6 @@ where
       c_primary.clone(),
       pp.ro_consts_circuit_primary.clone(),
     );
-    println!("---- MAP primary circuit ----");
     let _ = circuit_primary.clone().synthesize(&mut cs_primary)?;
     if false {
       println!("---- MAP primary TEST circuit ----");
@@ -329,11 +326,10 @@ where
       pp.ro_consts_circuit_secondary.clone(),
     );
 
-    println!("---- MAP secondary circuit ----");
     let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
     let (u_secondary, w_secondary) =
       cs_secondary.r1cs_instance_and_witness(&pp.r1cs_shape_secondary, &pp.ck_secondary)?;
-    if true {
+    if false {
       println!("---- MAP secondary TEST circuit ----");
       let mut test_cs_secondary = TestConstraintSystem::new();
       let _ = circuit_secondary.synthesize(&mut test_cs_secondary)?;
@@ -375,26 +371,26 @@ where
     let z_end_primary = c_primary.output_map(&z_start_primary);
     let z_end_secondary = c_secondary.output_map(&z_start_secondary);
 
-    println!(
-      " !! End of MAP step: U_primary.W.x: {:?}",
-      U_primary.comm_W.to_coordinates()
-    );
-    println!(
-      " !! End of MAP step: U_secondary.W.x: {:?}",
-      U_secondary.comm_W.to_coordinates()
-    );
+    //println!(
+    //  " !! End of MAP step: U_primary.W.x: {:?}",
+    //  U_primary.comm_W.to_coordinates()
+    //);
+    //println!(
+    //  " !! End of MAP step: U_secondary.W.x: {:?}",
+    //  U_secondary.comm_W.to_coordinates()
+    //);
 
-    println!(" !! End of MAP step: u_primary.X0: {:?}", u_primary.X[0]);
-    println!(" !! End of MAP step: u_primary.X1: {:?}", u_primary.X[1]);
-    println!(" !! End of MAP step: u_primary.X2: {:?}", u_primary.X[2]);
-    println!(
-      " !! End of MAP step: u_secondary.X0: {:?}",
-      u_secondary.X[0]
-    );
-    println!(
-      " !! End of MAP step: u_secondary.X1: {:?}",
-      u_secondary.X[1]
-    );
+    //println!(" !! End of MAP step: u_primary.X0: {:?}", u_primary.X[0]);
+    //println!(" !! End of MAP step: u_primary.X1: {:?}", u_primary.X[1]);
+    //println!(" !! End of MAP step: u_primary.X2: {:?}", u_primary.X[2]);
+    //println!(
+    //  " !! End of MAP step: u_secondary.X0: {:?}",
+    //  u_secondary.X[0]
+    //);
+    //println!(
+    //  " !! End of MAP step: u_secondary.X1: {:?}",
+    //  u_secondary.X[1]
+    //);
 
     Ok(Self {
       pp: pp,
@@ -516,10 +512,9 @@ where
       self.pp.ro_consts_circuit_primary.clone(),
     );
 
-    println!("----- MERGE primary circuit ----");
     let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
     let _ = circuit_primary.clone().synthesize(&mut cs_primary);
-    if true {
+    if false {
       println!("----- MERGE primary TEST circuit ----");
       let mut test_cs_primary = TestConstraintSystem::new();
       let _ = circuit_primary.synthesize(&mut test_cs_primary)?;
@@ -540,7 +535,7 @@ where
     );
     let w_primary = RelaxedR1CSWitness::from_r1cs_witness(&self.pp.r1cs_shape_primary, &w_primary);
 
-    println!("----- MERGE secondary circuit ----");
+    //println!("----- MERGE secondary circuit ----");
     // we want to fold
     // * L_i and l_i (just generated) into L_i+1 (proving F^(i)(z0) = zi)
     // * then L_i+1 and R_i+1 (from previous iteration) into U_i+1
@@ -558,37 +553,37 @@ where
       &w_primary,
       false,
     )?;
-    println!(
-      "[+] PROVER : (2 step) MERGE  left_U_primary {:?} with previous computed u_primary {:?} gives {:?}",
-      left.U_primary.comm_W.to_coordinates(),
-      u_primary.comm_W.to_coordinates(),
-      left_U_primary.comm_W.to_coordinates()
-    );
-    println!(
-      "\t - left_U.commW {:?} & u.commW {:?} ",
-      left.U_primary.comm_W.to_coordinates(),
-      u_primary.comm_W.to_coordinates()
-    );
-    println!(
-      "\t - commT {:?}",
-      Commitment::<G1>::decompress(&nifs_left_primary.comm_T)?.to_coordinates()
-    );
-    println!(
-      "\t - left_U.u {:?} & u.u {:?} ",
-      left.U_primary.u, u_primary.u
-    );
-    println!(
-      "\t - left_U.X0 {:?} & u.X0 {:?} ",
-      left.U_primary.X[0], u_primary.X[0]
-    );
-    println!(
-      "\t - left_U.X1 {:?} & u.X1 {:?} ",
-      left.U_primary.X[1], u_primary.X[1]
-    );
-    println!(
-      "\t - left_U.X2 {:?} & u.X2 {:?} ",
-      left.U_primary.X[2], u_primary.X[2]
-    );
+    //println!(
+    //  "[+] PROVER : (2 step) MERGE  left_U_primary {:?} with previous computed u_primary {:?} gives {:?}",
+    //  left.U_primary.comm_W.to_coordinates(),
+    //  u_primary.comm_W.to_coordinates(),
+    //  left_U_primary.comm_W.to_coordinates()
+    //);
+    //println!(
+    //  "\t - left_U.commW {:?} & u.commW {:?} ",
+    //  left.U_primary.comm_W.to_coordinates(),
+    //  u_primary.comm_W.to_coordinates()
+    //);
+    //println!(
+    //  "\t - commT {:?}",
+    //  Commitment::<G1>::decompress(&nifs_left_primary.comm_T)?.to_coordinates()
+    //);
+    //println!(
+    //  "\t - left_U.u {:?} & u.u {:?} ",
+    //  left.U_primary.u, u_primary.u
+    //);
+    //println!(
+    //  "\t - left_U.X0 {:?} & u.X0 {:?} ",
+    //  left.U_primary.X[0], u_primary.X[0]
+    //);
+    //println!(
+    //  "\t - left_U.X1 {:?} & u.X1 {:?} ",
+    //  left.U_primary.X[1], u_primary.X[1]
+    //);
+    //println!(
+    //  "\t - left_U.X2 {:?} & u.X2 {:?} ",
+    //  left.U_primary.X[2], u_primary.X[2]
+    //);
     let (nifs_primary, (U_primary, W_primary)) = NIFS::prove(
       &self.pp.ck_primary,
       &self.pp.ro_consts_primary,
@@ -599,12 +594,12 @@ where
       &right.W_primary,
       true,
     )?;
-    println!(
-      "[+] PROVER : MERGE SECONDARY U_fold {:?} with right relaxed {:?} gives {:?}",
-      left_U_primary.comm_W.to_coordinates(),
-      right.U_primary.comm_W.to_coordinates(),
-      U_primary.comm_W.to_coordinates()
-    );
+    //println!(
+    //  "[+] PROVER : MERGE SECONDARY U_fold {:?} with right relaxed {:?} gives {:?}",
+    //  left_U_primary.comm_W.to_coordinates(),
+    //  right.U_primary.comm_W.to_coordinates(),
+    //  U_primary.comm_W.to_coordinates()
+    //);
 
     // Next we construct a proof of this folding in the secondary curve
     let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
@@ -640,7 +635,7 @@ where
       self.pp.ro_consts_circuit_secondary.clone(),
     );
     let _ = circuit_secondary.clone().synthesize(&mut cs_secondary);
-    if true {
+    if false {
       println!("----- MERGE secondary TEST circuit ----");
       let mut test_cs_secondary = TestConstraintSystem::new();
       let _ = circuit_secondary.synthesize(&mut test_cs_secondary)?;
@@ -666,14 +661,14 @@ where
     // we know we have proven for this range.
     let i_start = left.i_start.clone();
     let i_end = right.i_end.clone();
-    println!("[+] PROVER MERGE output:");
-    println!("\t - (i_start,i_end) = ({},{})", i_start, i_end);
-    println!("\t - U_primary = {:?}", U_primary.comm_W.to_coordinates());
-    println!(
-      "\t - U_secondary.W  = {:?}",
-      U_secondary.comm_W.to_coordinates()
-    );
-    println!("\t\t - U_secondary.u: {:?}", U_secondary.u);
+    //println!("[+] PROVER MERGE output:");
+    //println!("\t - (i_start,i_end) = ({},{})", i_start, i_end);
+    //println!("\t - U_primary = {:?}", U_primary.comm_W.to_coordinates());
+    //println!(
+    //  "\t - U_secondary.W  = {:?}",
+    //  U_secondary.comm_W.to_coordinates()
+    //);
+    //println!("\t\t - U_secondary.u: {:?}", U_secondary.u);
     // z_start is technically useless after the map step, because reduce always take
     // the output and do not hash the first values. Nevertheless since we are in a single circuit
     // we have to give it as input always, as the "map" function is always computed.
@@ -868,7 +863,7 @@ where
     if nodes.len() == 1 {
       break;
     }
-    println!("\t --- !!! MERGE ALL: nodes.len() = {:?}", nodes.len());
+    //println!("\t --- !!! MERGE ALL: nodes.len() = {:?}", nodes.len());
     // New nodes list will reduce a half each round
     nodes = nodes
       .par_chunks(2)
@@ -1090,102 +1085,6 @@ mod tests {
     println!(" --- MERGE PROVING ---");
     let merged = leaf_0.reduce(leaf_1)?;
     merged.verify()?;
-    Ok(())
-  }
-
-  #[test]
-  fn test_secondary_fold_mixed() -> Result<(), NovaError> {
-    let pp = PublicParams::<
-      G1,
-      G2,
-      AverageCircuit<<G1 as Group>::Scalar>,
-      TrivialTestCircuit<<G2 as Group>::Scalar>,
-    >::setup(AverageCircuit::default(), TrivialTestCircuit::default())?;
-    let one = <G1 as Group>::Scalar::one();
-    let two = one + one;
-    let one2 = <G2 as Group>::Scalar::one();
-    let two2 = one2 + one2;
-    let four2 = two2 + two2;
-
-    println!(" --- FIRST LEAF PROVING ---");
-    let leaf_0 = TreeNode::map_step(
-      &pp,
-      AverageCircuit::default(),
-      TrivialTestCircuit::default(),
-      0,
-      vec![one],
-      vec![four2],
-    )?;
-    leaf_0.verify().expect("leaf 0 verification failed");
-    let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
-      &pp.ck_secondary,
-      &pp.ro_consts_secondary,
-      &pp.r1cs_shape_secondary,
-      &leaf_0.data.U_secondary,
-      &leaf_0.data.W_secondary,
-      &leaf_0.data.u_secondary,
-      &leaf_0.data.w_secondary,
-      false,
-    )?;
-    pp.r1cs_shape_secondary
-      .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
-      .expect("first NIFS is not sat");
-
-    // do it again
-    let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
-      &pp.ck_secondary,
-      &pp.ro_consts_secondary,
-      &pp.r1cs_shape_secondary,
-      &left_U_secondary,
-      &left_W_secondary,
-      &left_U_secondary,
-      &left_W_secondary,
-      true,
-    )?;
-    pp.r1cs_shape_secondary
-      .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
-      .expect("second NIFS is not sat");
-
-    //println!(" --- SECOND LEAF PROVING ---");
-    //let leaf_1 = TreeNode::map_step(
-    //  &pp,
-    //  AverageCircuit::default(),
-    //  TrivialTestCircuit::default(),
-    //  1,
-    //  vec![two],
-    //  vec![four2],
-    //)?;
-    //leaf_1.verify().expect("leaf 1 verification failed");
-
-    // do first folding and verify correctness
-    //let (nifs_left_secondary, (left_U_secondary, left_W_secondary)) = NIFS::prove(
-    //  &pp.ck_secondary,
-    //  &pp.ro_consts_secondary,
-    //  &pp.r1cs_shape_secondary,
-    //  &leaf_0.data.U_secondary,
-    //  &leaf_0.data.W_secondary,
-    //  &leaf_0.data.u_secondary,
-    //  &leaf_0.data.w_secondary,
-    //  false,
-    //)?;
-    //pp.r1cs_shape_secondary
-    //  .is_sat_relaxed(&pp.ck_secondary, &left_U_secondary, &left_W_secondary)
-    //  .expect("left secondary instance is not sat");
-
-    //let (nifs_secondary, (U_secondary, W_secondary)) = NIFS::prove(
-    //  &pp.ck_secondary,
-    //  &pp.ro_consts_secondary,
-    //  &pp.r1cs_shape_secondary,
-    //  &left_U_secondary,
-    //  &left_W_secondary,
-    //  &leaf_1.data.U_secondary,
-    //  &leaf_1.data.W_secondary,
-    //  true,
-    //)?;
-    //pp.r1cs_shape_secondary
-    //  .is_sat_relaxed(&pp.ck_secondary, &U_secondary, &W_secondary)
-    //  .expect("secondary instance is not sat");
-
     Ok(())
   }
 }
